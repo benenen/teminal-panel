@@ -1,3 +1,6 @@
+mod agent;
+mod config;
+
 fn main() {
-    println!("Hello, world!");
+    println!("teminal-panel");
 }
