@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentStatus};
+use crate::agent::Agent;
 use crate::config::AppConfig;
 use iced::widget::{button, column, container, row, text};
 use iced::{Element, Length, Task, Theme};
@@ -21,12 +21,11 @@ pub enum Message {
 impl App {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load();
-        let selected_agent = config.agents.first().map(|agent| agent.id);
 
         (
             Self {
                 config,
-                selected_agent,
+                selected_agent: None,
             },
             Task::none(),
         )
@@ -39,7 +38,6 @@ impl App {
             }
             Message::AddAgent { name, working_dir } => {
                 let agent = Agent::new_local(name, PathBuf::from(working_dir));
-                self.selected_agent = Some(agent.id);
                 self.config.agents.push(agent);
                 self.config.save();
             }
@@ -47,22 +45,12 @@ impl App {
                 self.config.agents.retain(|agent| agent.id != id);
 
                 if self.selected_agent == Some(id) {
-                    self.selected_agent = self.config.agents.first().map(|agent| agent.id);
+                    self.selected_agent = None;
                 }
 
                 self.config.save();
             }
-            Message::AgentStatusChanged(id, status) => {
-                if let Some(agent) = self.config.agents.iter_mut().find(|agent| agent.id == id) {
-                    agent.status = match status.as_str() {
-                        "connected" => AgentStatus::Connected,
-                        "connecting" => AgentStatus::Connecting,
-                        "disconnected" => AgentStatus::Disconnected,
-                        other => AgentStatus::Error(other.to_owned()),
-                    };
-                    self.config.save();
-                }
-            }
+            Message::AgentStatusChanged(_, _) => {}
         }
 
         Task::none()
@@ -79,14 +67,8 @@ impl App {
         let mut agent_list = column![text("Agents").size(24)].spacing(8).width(220);
 
         for agent in &self.config.agents {
-            let label = if self.selected_agent == Some(agent.id) {
-                format!("> {}", agent.name)
-            } else {
-                agent.name.clone()
-            };
-
             agent_list = agent_list.push(
-                button(text(label))
+                button(text(agent.name.clone()))
                     .width(Length::Fill)
                     .on_press(Message::SelectAgent(agent.id)),
             );
@@ -103,23 +85,14 @@ impl App {
             .selected_agent
             .and_then(|selected| self.config.agents.iter().find(|agent| agent.id == selected))
         {
-            let status = match &agent.status {
-                AgentStatus::Disconnected => "disconnected".to_owned(),
-                AgentStatus::Connected => "connected".to_owned(),
-                AgentStatus::Connecting => "connecting".to_owned(),
-                AgentStatus::Error(message) => format!("error: {message}"),
-            };
-
             column![
                 text(format!("Selected agent: {}", agent.name)).size(24),
-                text(format!("Working directory: {}", agent.working_dir.display())),
-                text(format!("Status: {status}")),
                 text("Terminal area placeholder")
             ]
             .spacing(8)
         } else {
             column![
-                text("No agent selected").size(24),
+                text("Select an agent to open a terminal").size(24),
                 text("Terminal area placeholder")
             ]
             .spacing(8)
@@ -131,7 +104,7 @@ impl App {
             .into()
     }
 
-    pub fn theme(&self) -> Theme {
+    pub fn theme() -> Theme {
         Theme::Dark
     }
 }
