@@ -11,7 +11,6 @@ use iced::widget::{column, container, row, text, Space};
 use iced::{
     alignment, Color, Element, Event, Font, Length, Pixels, Rectangle, Renderer, Size, Theme,
 };
-use wezterm_term::Terminal;
 use wezterm_term::color::ColorAttribute;
 use wezterm_cell::{Intensity, Underline, CellAttributes};
 use uuid::Uuid;
@@ -29,11 +28,8 @@ pub fn terminal_view<'a>(
     on_resize: impl Fn(TerminalViewport) -> Message + 'a,
     on_key: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let terminal = model.surface();
+    let _terminal = model.surface();
     let mut rows = column![].spacing(0);
-
-    // Get screen and iterate through visible lines
-    let screen = terminal.screen();
 
     // For now, render a simple placeholder
     // TODO: Properly iterate through screen lines once API is clarified
