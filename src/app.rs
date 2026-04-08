@@ -148,7 +148,7 @@ impl App {
                                 TerminalState {
                                     id: project_id,
                                     project_id: project_id,
-                                    model: TerminalModel::new(80, 24),
+                                    model: TerminalModel::new(120, 40),
                                     input_buf: String::new(),
                                     writer,
                                     lifecycle: Some(lifecycle),
@@ -544,7 +544,7 @@ mod tests {
             TerminalState {
                 id: project_id,
                 project_id: project_id,
-                model: TerminalModel::new(80, 24),
+                model: TerminalModel::new(120, 40),
                 input_buf: String::new(),
                 writer: Box::new(writer),
                 lifecycle,
@@ -572,7 +572,7 @@ mod tests {
             TerminalState {
                 id: project_id,
                 project_id: project_id,
-                model: TerminalModel::new(80, 24),
+                model: TerminalModel::new(120, 40),
                 input_buf: String::new(),
                 writer: Box::new(writer),
                 lifecycle: None,
