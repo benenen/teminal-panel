@@ -10,8 +10,6 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const PTY_CHANNEL_CAPACITY: usize = 256;
-const TERMINAL_CELL_WIDTH: f32 = 8.0;
-const TERMINAL_CELL_HEIGHT: f32 = 16.0;
 
 pub struct App {
     pub config: AppConfig,
@@ -291,8 +289,12 @@ impl App {
                 if let Some(terminal) = self.terminals.get(&selected_id) {
                     column![
                         text(format!("Terminal: {}", agent.name)).size(24),
-                        scrollable(render::terminal_view(selected_id, &terminal.model))
-                            .height(Length::Fill),
+                        container(render::terminal_view(
+                            selected_id,
+                            &terminal.model,
+                            move |viewport| Message::TerminalViewportChanged(selected_id, viewport),
+                        ))
+                        .height(Length::Fill),
                         text_input("$ ...", &terminal.input_buf)
                             .on_input(move |value| Message::InputChanged(selected_id, value))
                             .on_submit(Message::TerminalInput(
@@ -344,8 +346,8 @@ fn terminal_size_for_viewport(viewport: TerminalViewport) -> Option<crate::termi
         return None;
     }
 
-    let cols = (viewport.width / TERMINAL_CELL_WIDTH).floor() as u16;
-    let rows = (viewport.height / TERMINAL_CELL_HEIGHT).floor() as u16;
+    let cols = (viewport.width / render::CELL_WIDTH).floor() as u16;
+    let rows = (viewport.height / render::CELL_HEIGHT).floor() as u16;
 
     if cols == 0 || rows == 0 {
         return None;
