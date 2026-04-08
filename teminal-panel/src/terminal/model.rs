@@ -2,7 +2,6 @@ use wezterm_term::Terminal;
 use wezterm_escape_parser::parser::Parser;
 use std::sync::Arc;
 use std::io::Write;
-use wezterm_cell::UnicodeVersion;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalSize {
@@ -10,6 +9,7 @@ pub struct TerminalSize {
     pub rows: u16,
 }
 
+#[allow(private_interfaces)]
 #[derive(Debug)]
 struct DummyConfig;
 
@@ -58,7 +58,9 @@ impl wezterm_term::TerminalConfiguration for DummyConfig {
         Default::default()
     }
 
-    fn unicode_version(&self) -> UnicodeVersion {
+    fn unicode_version(&self) -> wezterm_term::config::UnicodeVersion {
+        // Placeholder - UnicodeVersion is private in wezterm_term
+        // This will be fixed when the trait is properly exposed
         unsafe { std::mem::zeroed() }
     }
 
