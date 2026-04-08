@@ -315,6 +315,7 @@ impl App {
                             selected_id,
                             &terminal.model,
                             move |viewport| Message::TerminalViewportChanged(selected_id, viewport),
+                            move |ch| Message::TerminalInput(selected_id, ch),
                         ))
                         .height(Length::Fill),
                         text_input("$ ...", &terminal.input_buf)

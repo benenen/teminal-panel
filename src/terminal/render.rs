@@ -5,6 +5,7 @@ use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget};
+use iced::keyboard;
 use iced::widget::{column, container, row, text, Space};
 use iced::{
     alignment, Color, Element, Event, Font, Length, Pixels, Rectangle, Renderer, Size, Theme,
@@ -25,6 +26,7 @@ pub fn terminal_view<'a>(
     _terminal_id: Uuid,
     model: &'a TerminalModel,
     on_resize: impl Fn(TerminalViewport) -> Message + 'a,
+    on_key: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
     let surface = model.surface();
     let (cursor_x, cursor_y) = surface.cursor_position();
@@ -67,6 +69,7 @@ pub fn terminal_view<'a>(
     ViewportReporter::new(
         container(rows).width(Length::Fill).height(Length::Fill),
         on_resize,
+        on_key,
     )
     .into()
 }
@@ -223,6 +226,7 @@ fn xterm_color_cube(value: u8) -> u8 {
 struct ViewportReporter<'a, Message> {
     content: Element<'a, Message>,
     on_resize: Box<dyn Fn(TerminalViewport) -> Message + 'a>,
+    on_key: Box<dyn Fn(String) -> Message + 'a>,
 }
 
 #[derive(Default)]
@@ -234,10 +238,12 @@ impl<'a, Message> ViewportReporter<'a, Message> {
     fn new(
         content: impl Into<Element<'a, Message>>,
         on_resize: impl Fn(TerminalViewport) -> Message + 'a,
+        on_key: impl Fn(String) -> Message + 'a,
     ) -> Self {
         Self {
             content: content.into(),
             on_resize: Box::new(on_resize),
+            on_key: Box::new(on_key),
         }
     }
 }
@@ -299,16 +305,35 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
     ) -> iced::event::Status {
         publish_viewport_if_changed(self, tree, layout.bounds(), shell);
 
-        self.content.as_widget_mut().on_event(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        )
+        match &event {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+                if let keyboard::Key::Character(ch) = key {
+                    shell.publish((self.on_key)(ch.to_string()));
+                    iced::event::Status::Captured
+                } else {
+                    self.content.as_widget_mut().on_event(
+                        &mut tree.children[0],
+                        event,
+                        layout,
+                        cursor,
+                        renderer,
+                        clipboard,
+                        shell,
+                        viewport,
+                    )
+                }
+            }
+            _ => self.content.as_widget_mut().on_event(
+                &mut tree.children[0],
+                event,
+                layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            ),
+        }
     }
 
     fn mouse_interaction(
