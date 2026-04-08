@@ -233,10 +233,75 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        row![self.view_project_panel(), self.view_terminal_area()]
+        let main_content = row![self.view_project_panel(), self.view_terminal_area()]
             .spacing(16)
-            .padding(16)
+            .padding(16);
+
+        if self.add_form.visible {
+            let selected_dir = self
+                .add_form
+                .selected_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "No folder selected".into());
+
+            let modal = container(
+                column![
+                    text("Add Project").size(20),
+                    text_input("Project Name", &self.add_form.name)
+                        .on_input(Message::FormNameChanged)
+                        .on_submit(Message::SubmitAddProjectForm),
+                    row![
+                        text(selected_dir).size(12),
+                        button(text("Choose Folder"))
+                            .on_press(Message::ChooseProjectFolder),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::alignment::Vertical::Center),
+                    row![
+                        button(text("Add"))
+                            .width(Length::Fill)
+                            .on_press(Message::SubmitAddProjectForm),
+                        button(text("Cancel"))
+                            .width(Length::Fill)
+                            .on_press(Message::HideAddProjectForm),
+                    ]
+                    .spacing(8),
+                ]
+                .spacing(16)
+                .padding(20)
+            )
+            .width(Length::Fixed(400.0))
+            .style(|_| {
+                container::Style::default()
+                    .background(iced::Color::from_rgb8(45, 45, 45))
+                    .border(iced::Border {
+                        color: iced::Color::from_rgb8(100, 100, 100),
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    })
+            });
+
+            let overlay = container(modal)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_| {
+                    container::Style::default()
+                        .background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5))
+                })
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
+
+            column![
+                container(main_content)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                overlay,
+            ]
             .into()
+        } else {
+            main_content.into()
+        }
     }
 
     fn view_project_panel(&self) -> Element<'_, Message> {
@@ -259,39 +324,13 @@ impl App {
             )
         });
 
-        let selected_dir = self
-            .add_form
-            .selected_dir
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "No folder selected".into());
-
-        let add_section: Element<'_, Message> = if self.add_form.visible {
-            column![
-                text_input("Name", &self.add_form.name)
-                    .on_input(Message::FormNameChanged)
-                    .on_submit(Message::SubmitAddProjectForm),
-                text(selected_dir).size(12),
-                button(text("Choose Folder")).on_press(Message::ChooseProjectFolder),
-                row![
-                    button(text("Add")).on_press(Message::SubmitAddProjectForm),
-                    button(text("Cancel")).on_press(Message::HideAddProjectForm),
-                ]
-                .spacing(6),
-            ]
-            .spacing(6)
-            .into()
-        } else {
-            button(text("+ Add Project"))
-                .on_press(Message::ShowAddProjectForm)
-                .into()
-        };
-
         container(
             column![
                 text("Projects").size(24),
                 scrollable(project_list.spacing(8)).height(Length::Fill),
-                add_section,
+                button(text("+ Add Project"))
+                    .width(Length::Fill)
+                    .on_press(Message::ShowAddProjectForm),
             ]
             .spacing(12),
         )
