@@ -341,7 +341,9 @@ impl App {
     }
 }
 
-fn terminal_size_for_viewport(viewport: TerminalViewport) -> Option<crate::terminal::model::TerminalSize> {
+fn terminal_size_for_viewport(
+    viewport: TerminalViewport,
+) -> Option<crate::terminal::model::TerminalSize> {
     if !viewport.width.is_finite() || !viewport.height.is_finite() {
         return None;
     }

@@ -1,7 +1,7 @@
 use termwiz::cell::AttributeChange;
 use termwiz::color::ColorAttribute;
 use termwiz::escape::{
-    csi::{CSI, Cursor, Edit, EraseInDisplay, EraseInLine, Sgr},
+    csi::{Cursor, Edit, EraseInDisplay, EraseInLine, Sgr, CSI},
     parser::Parser,
     Action, ControlCode,
 };
@@ -118,10 +118,12 @@ fn apply_sgr(surface: &mut Surface, sgr: Sgr) {
             let _ = surface.add_change(Change::Attribute(AttributeChange::Reverse(enabled)));
         }
         Sgr::Foreground(color) => {
-            let _ = surface.add_change(Change::Attribute(AttributeChange::Foreground(color.into())));
+            let _ =
+                surface.add_change(Change::Attribute(AttributeChange::Foreground(color.into())));
         }
         Sgr::Background(color) => {
-            let _ = surface.add_change(Change::Attribute(AttributeChange::Background(color.into())));
+            let _ =
+                surface.add_change(Change::Attribute(AttributeChange::Background(color.into())));
         }
         _ => {}
     }
@@ -251,12 +253,73 @@ mod tests {
     }
 
     #[test]
+    fn clear_command_sequence_erases_visible_text() {
+        let mut model = TerminalModel::new(20, 4);
+
+        model.advance_bytes(b"abc");
+        assert!(model.surface.screen_chars_to_string().contains("abc"));
+
+        model.advance_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+
+        assert!(!model.surface.screen_chars_to_string().contains("abc"));
+    }
+
+    #[test]
+    fn clear_command_sequence_clears_wrapped_visible_cells() {
+        let mut model = TerminalModel::new(20, 6);
+
+        model.advance_bytes(
+            b"root@host:/workspace/plan2-termwiz-rendering$ printf 'one\\ntwo\\n'\r\none\r\ntwo\r\n",
+        );
+
+        let before_clear = model
+            .surface()
+            .screen_lines()
+            .into_iter()
+            .map(|line| {
+                line.visible_cells()
+                    .map(|cell| cell.str().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(before_clear.contains("one"));
+        assert!(before_clear.contains("two"));
+
+        model.advance_bytes(b"\x1b[H\x1b[2J\x1b[3Jroot@host:/workspace/plan2-termwiz-rendering$ ");
+
+        let after_clear = model
+            .surface()
+            .screen_lines()
+            .into_iter()
+            .map(|line| {
+                line.visible_cells()
+                    .map(|cell| cell.str().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!after_clear.contains("one"));
+        assert!(!after_clear.contains("two"));
+    }
+
+    #[test]
     fn resize_updates_surface_dimensions() {
         let mut model = TerminalModel::new(80, 24);
 
-        model.resize(TerminalSize { cols: 100, rows: 40 });
+        model.resize(TerminalSize {
+            cols: 100,
+            rows: 40,
+        });
 
-        assert_eq!(model.size(), TerminalSize { cols: 100, rows: 40 });
+        assert_eq!(
+            model.size(),
+            TerminalSize {
+                cols: 100,
+                rows: 40
+            }
+        );
         assert_eq!(model.surface.dimensions(), (100, 40));
     }
 }

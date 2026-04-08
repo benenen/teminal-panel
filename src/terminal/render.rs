@@ -5,134 +5,126 @@ use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget};
-use iced::widget::canvas;
-use iced::{alignment, Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
+use iced::widget::{column, container, row, text, Space};
+use iced::{
+    alignment, Color, Element, Event, Font, Length, Pixels, Rectangle, Renderer, Size, Theme,
+};
 use termwiz::cell::{CellAttributes, Intensity, Underline};
 use termwiz::color::{ColorAttribute, SrgbaTuple};
-use termwiz::surface::{CursorShape, CursorVisibility};
+use termwiz::surface::CursorVisibility;
 use uuid::Uuid;
 
 pub const CELL_WIDTH: f32 = 8.0;
 pub const CELL_HEIGHT: f32 = 16.0;
 pub const FONT_SIZE: f32 = 14.0;
 
-const DEFAULT_FOREGROUND: Color = Color::from_rgb(
-    229.0 / 255.0,
-    229.0 / 255.0,
-    229.0 / 255.0,
-);
-const DEFAULT_BACKGROUND: Color = Color::from_rgb(
-    30.0 / 255.0,
-    30.0 / 255.0,
-    30.0 / 255.0,
-);
+const DEFAULT_FOREGROUND: Color = Color::from_rgb(229.0 / 255.0, 229.0 / 255.0, 229.0 / 255.0);
+const DEFAULT_BACKGROUND: Color = Color::from_rgb(30.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0);
 
 pub fn terminal_view<'a>(
     _terminal_id: Uuid,
     model: &'a TerminalModel,
     on_resize: impl Fn(TerminalViewport) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let canvas = canvas(TerminalCanvas { model })
-        .width(Length::Fill)
-        .height(Length::Fill);
+    let surface = model.surface();
+    let (cursor_x, cursor_y) = surface.cursor_position();
+    let show_cursor = surface.cursor_visibility() == CursorVisibility::Visible;
+    let mut rows = column![].spacing(0);
 
-    ViewportReporter::new(canvas, on_resize).into()
-}
+    for (row_index, line) in surface.screen_lines().iter().enumerate() {
+        let mut cells = row![].spacing(0);
+        let mut next_col = 0usize;
 
-struct TerminalCanvas<'a> {
-    model: &'a TerminalModel,
-}
-
-impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalCanvas<'_> {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<canvas::Geometry<Renderer>> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let surface = self.model.surface();
-
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), DEFAULT_BACKGROUND);
-
-        for (row_index, line) in surface.screen_lines().iter().enumerate() {
-            for cell in line.visible_cells() {
-                let x = cell.cell_index() as f32 * CELL_WIDTH;
-                let y = row_index as f32 * CELL_HEIGHT;
-                let width = cell.width() as f32 * CELL_WIDTH;
-                let attrs = cell.attrs();
-                let (foreground, background) = resolved_colors(attrs);
-
-                if background != DEFAULT_BACKGROUND {
-                    frame.fill_rectangle(
-                        Point::new(x, y),
-                        Size::new(width, CELL_HEIGHT),
-                        background,
-                    );
-                }
-
-                if attrs.underline() != Underline::None {
-                    frame.fill_rectangle(
-                        Point::new(x, y + CELL_HEIGHT - 2.0),
-                        Size::new(width, 1.5),
-                        foreground,
-                    );
-                }
-
-                if should_draw_text(cell.str()) {
-                    frame.fill_text(canvas::Text {
-                        content: cell.str().to_string(),
-                        position: Point::new(x, y),
-                        color: foreground,
-                        size: Pixels(FONT_SIZE),
-                        line_height: iced::widget::text::LineHeight::default(),
-                        font: Font::MONOSPACE,
-                        horizontal_alignment: alignment::Horizontal::Left,
-                        vertical_alignment: alignment::Vertical::Top,
-                        shaping: iced::widget::text::Shaping::Basic,
-                    });
-                }
+        for cell in line.visible_cells() {
+            while next_col < cell.cell_index() {
+                cells = cells.push(render_cell(" ".to_string(), &Default::default(), 1, false));
+                next_col += 1;
             }
+
+            let cell_width = cell.width();
+            let is_cursor = show_cursor
+                && row_index == cursor_y
+                && cursor_x >= cell.cell_index()
+                && cursor_x < cell.cell_index() + cell_width;
+
+            cells = cells.push(render_cell(
+                cell.str().to_string(),
+                cell.attrs(),
+                cell_width,
+                is_cursor,
+            ));
+            next_col = cell.cell_index() + cell_width;
         }
 
-        draw_cursor(&mut frame, surface);
+        while next_col < model.size().cols as usize {
+            cells = cells.push(render_cell(" ".to_string(), &Default::default(), 1, false));
+            next_col += 1;
+        }
 
-        vec![frame.into_geometry()]
+        rows = rows.push(container(cells).height(Length::Fixed(CELL_HEIGHT)));
     }
+
+    ViewportReporter::new(
+        container(rows).width(Length::Fill).height(Length::Fill),
+        on_resize,
+    )
+    .into()
 }
 
-fn draw_cursor(frame: &mut canvas::Frame<Renderer>, surface: &termwiz::surface::Surface) {
-    if surface.cursor_visibility() != CursorVisibility::Visible {
-        return;
+fn render_cell<'a>(
+    content: String,
+    attrs: &CellAttributes,
+    width: usize,
+    is_cursor: bool,
+) -> Element<'a, Message> {
+    let (mut foreground, mut background) = resolved_colors(attrs);
+
+    if is_cursor {
+        std::mem::swap(&mut foreground, &mut background);
     }
 
-    let (x, y) = surface.cursor_position();
-    let top_left = Point::new(x as f32 * CELL_WIDTH, y as f32 * CELL_HEIGHT);
-    let cursor_color = DEFAULT_FOREGROUND;
+    let underline_height = if attrs.underline() == Underline::None {
+        0.0
+    } else {
+        2.0
+    };
+    let text_height = (CELL_HEIGHT - underline_height).max(0.0);
+    let display = if content.is_empty() {
+        " ".to_string()
+    } else {
+        content
+    };
+    let text = text(display)
+        .font(Font::MONOSPACE)
+        .size(Pixels(FONT_SIZE))
+        .width(Length::Fill)
+        .height(Length::Fixed(text_height))
+        .align_x(alignment::Horizontal::Left);
 
-    match surface.cursor_shape().unwrap_or(CursorShape::SteadyBlock) {
-        CursorShape::BlinkingUnderline | CursorShape::SteadyUnderline => {
-            frame.fill_rectangle(
-                Point::new(top_left.x, top_left.y + CELL_HEIGHT - 2.0),
-                Size::new(CELL_WIDTH, 2.0),
-                cursor_color,
-            );
-        }
-        CursorShape::BlinkingBar | CursorShape::SteadyBar => {
-            frame.fill_rectangle(top_left, Size::new(2.0, CELL_HEIGHT), cursor_color);
-        }
-        _ => {
-            frame.stroke_rectangle(
-                top_left,
-                Size::new(CELL_WIDTH, CELL_HEIGHT),
-                canvas::Stroke::default().with_color(cursor_color).with_width(1.0),
-            );
-        }
+    let mut body = column![container(text)
+        .width(Length::Fill)
+        .height(Length::Fixed(text_height))
+        .style(move |_| {
+            container::Style::default()
+                .color(foreground)
+                .background(background)
+        })]
+    .spacing(0);
+
+    if underline_height > 0.0 {
+        body = body.push(
+            container(Space::with_width(Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fixed(underline_height))
+                .style(move |_| container::Style::default().background(foreground)),
+        );
     }
+
+    container(body)
+        .width(Length::Fixed(CELL_WIDTH * width as f32))
+        .height(Length::Fixed(CELL_HEIGHT))
+        .style(move |_| container::Style::default().background(background))
+        .into()
 }
 
 fn resolved_colors(attrs: &CellAttributes) -> (Color, Color) {
@@ -148,10 +140,6 @@ fn resolved_colors(attrs: &CellAttributes) -> (Color, Color) {
     }
 
     (foreground, background)
-}
-
-fn should_draw_text(text: &str) -> bool {
-    !text.is_empty() && text != " "
 }
 
 fn brighten(color: Color) -> Color {
