@@ -1,4 +1,4 @@
-use crate::agent::{panel::AddProjectForm, Project};
+use crate::project::{panel::AddProjectForm, Project};
 use crate::config::AppConfig;
 use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
