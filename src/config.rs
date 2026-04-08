@@ -5,7 +5,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
-    #[serde(rename = "projects")]
+    pub projects: Vec<Project>,
+    #[serde(skip)]
     pub agents: Vec<Project>,
 }
 
@@ -28,21 +29,14 @@ impl AppConfig {
     }
 
     fn from_compat(compat: AppConfigCompat) -> Self {
-        let projects = if compat.projects.is_empty() {
-            compat.agents
-        } else {
-            compat.projects
-        };
-
-        Self { agents: projects }
-    }
-
-    pub fn projects(&self) -> &[Project] {
-        &self.agents
-    }
-
-    pub fn projects_mut(&mut self) -> &mut Vec<Project> {
-        &mut self.agents
+        let mut projects = compat.projects;
+        if projects.is_empty() {
+            projects = compat.agents;
+        }
+        Self {
+            projects: projects.clone(),
+            agents: projects,
+        }
     }
 
     pub fn save(&self) {
@@ -50,7 +44,9 @@ impl AppConfig {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(content) = toml::to_string_pretty(self) {
+        let mut serializable = self.clone();
+        serializable.projects = self.agents.clone();
+        if let Ok(content) = toml::to_string_pretty(&serializable) {
             let _ = std::fs::write(&path, content);
         }
     }
@@ -68,6 +64,13 @@ struct AppConfigCompat {
 mod tests {
     use super::*;
 
+    fn config_with_projects(projects: Vec<Project>) -> AppConfig {
+        AppConfig {
+            projects: projects.clone(),
+            agents: projects,
+        }
+    }
+ 
     #[test]
     fn legacy_agents_toml_deserializes_into_projects() {
         let compat: AppConfigCompat = toml::from_str(
@@ -86,17 +89,16 @@ mod tests {
 
         let config = AppConfig::from_compat(compat);
 
-        assert_eq!(config.projects().len(), 1);
-        assert_eq!(config.projects()[0].name, "Legacy Project");
+        assert_eq!(config.projects.len(), 1);
+        assert_eq!(config.projects[0].name, "Legacy Project");
     }
 
     #[test]
     fn serializing_config_emits_projects_and_not_agents() {
-        let mut config = AppConfig::default();
-        config.projects_mut().push(Project::new_local(
+        let config = config_with_projects(vec![Project::new_local(
             "Demo".into(),
             std::path::PathBuf::from("/tmp/demo"),
-        ));
+        )]);
 
         let text = toml::to_string_pretty(&config).expect("serialize config");
 
