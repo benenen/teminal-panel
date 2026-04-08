@@ -29,7 +29,9 @@ pub enum Message {
     HideAddProjectForm,
     FormNameChanged(String),
     FormDirChanged(String),
-    SubmitAddForm,
+    ChooseProjectFolder,
+    ProjectFolderSelected(Option<PathBuf>),
+    SubmitAddProjectForm,
     OpenTerminal(Uuid),
     PtyOutput(Uuid, Vec<u8>),
     TerminalViewportChanged(Uuid, TerminalViewport),
@@ -67,7 +69,7 @@ impl App {
                 self.selected_project = Some(id);
             }
             Message::AddProject { name, working_dir } => {
-                self.add_local_project(name, working_dir);
+                self.add_local_project(name, PathBuf::from(working_dir));
             }
             Message::RemoveProject(id) => {
                 self.config.projects.retain(|project| project.id != id);
@@ -92,15 +94,30 @@ impl App {
             Message::FormNameChanged(value) => {
                 self.add_form.name = value;
             }
-            Message::FormDirChanged(value) => {
-                self.add_form.working_dir = value;
+            Message::FormDirChanged(_value) => {
+                // Keep for backward compatibility, but unused in new UI
             }
-            Message::SubmitAddForm => {
-                if self.add_local_project(
-                    self.add_form.name.clone(),
-                    self.add_form.working_dir.clone(),
-                ) {
-                    self.add_form = Default::default();
+            Message::ChooseProjectFolder => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .pick_folder()
+                            .await
+                            .map(|handle| handle.path().to_path_buf())
+                    },
+                    Message::ProjectFolderSelected,
+                );
+            }
+            Message::ProjectFolderSelected(selection) => {
+                if let Some(path) = selection {
+                    self.add_form.selected_dir = Some(path);
+                }
+            }
+            Message::SubmitAddProjectForm => {
+                if let Some(path) = self.add_form.selected_dir.clone() {
+                    if self.add_local_project(self.add_form.name.clone(), path) {
+                        self.add_form = Default::default();
+                    }
                 }
             }
             Message::OpenTerminal(project_id) => {
@@ -196,16 +213,10 @@ impl App {
         Task::none()
     }
 
-    fn add_local_project(&mut self, name: String, working_dir: String) -> bool {
+    fn add_local_project(&mut self, name: String, working_dir: PathBuf) -> bool {
         let name = name.trim().to_string();
-        let working_dir = working_dir.trim().to_string();
 
-        if name.is_empty() || working_dir.is_empty() {
-            return false;
-        }
-
-        let working_dir = PathBuf::from(working_dir);
-        if !working_dir.is_dir() {
+        if name.is_empty() || !working_dir.is_dir() {
             return false;
         }
 
@@ -248,16 +259,22 @@ impl App {
             )
         });
 
+        let selected_dir = self
+            .add_form
+            .selected_dir
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "No folder selected".into());
+
         let add_section: Element<'_, Message> = if self.add_form.visible {
             column![
                 text_input("Name", &self.add_form.name)
                     .on_input(Message::FormNameChanged)
-                    .on_submit(Message::SubmitAddForm),
-                text_input("Directory", &self.add_form.working_dir)
-                    .on_input(Message::FormDirChanged)
-                    .on_submit(Message::SubmitAddForm),
+                    .on_submit(Message::SubmitAddProjectForm),
+                text(selected_dir).size(12),
+                button(text("Choose Folder")).on_press(Message::ChooseProjectFolder),
                 row![
-                    button(text("Add")).on_press(Message::SubmitAddForm),
+                    button(text("Add")).on_press(Message::SubmitAddProjectForm),
                     button(text("Cancel")).on_press(Message::HideAddProjectForm),
                 ]
                 .spacing(6),
@@ -570,26 +587,23 @@ mod tests {
         assert!(app.add_form.visible);
 
         let _ = app.update(Message::FormNameChanged("Local agent".into()));
-        let _ = app.update(Message::FormDirChanged("/tmp/work".into()));
         assert_eq!(app.add_form.name, "Local agent");
-        assert_eq!(app.add_form.working_dir, "/tmp/work");
 
         let _ = app.update(Message::HideAddProjectForm);
         assert!(!app.add_form.visible);
         assert!(app.add_form.name.is_empty());
-        assert!(app.add_form.working_dir.is_empty());
+        assert_eq!(app.add_form.selected_dir, None);
     }
 
     #[test]
     fn submit_add_form_adds_project_and_resets_form() {
         with_temp_config_dir(|workspace_dir: &PathBuf| {
             let mut app = test_app();
-            let working_dir = workspace_dir.display().to_string();
 
             let _ = app.update(Message::ShowAddProjectForm);
             let _ = app.update(Message::FormNameChanged("Local agent".into()));
-            let _ = app.update(Message::FormDirChanged(working_dir.clone()));
-            let _ = app.update(Message::SubmitAddForm);
+            let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
+            let _ = app.update(Message::SubmitAddProjectForm);
 
             assert_eq!(app.config.projects.len(), 1);
             assert_eq!(app.config.projects[0].name, "Local agent");
@@ -598,8 +612,7 @@ mod tests {
                 workspace_dir.clone()
             );
             assert!(!app.add_form.visible);
-            assert!(app.add_form.name.is_empty());
-            assert!(app.add_form.working_dir.is_empty());
+            assert_eq!(app.add_form.selected_dir, None);
 
             let persisted = AppConfig::load();
             assert_eq!(persisted.projects.len(), 1);
@@ -614,8 +627,8 @@ mod tests {
 
             let _ = app.update(Message::ShowAddProjectForm);
             let _ = app.update(Message::FormNameChanged("Local agent".into()));
-            let _ = app.update(Message::FormDirChanged("/tmp/missing-directory".into()));
-            let _ = app.update(Message::SubmitAddForm);
+            let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/tmp/missing-directory"))));
+            let _ = app.update(Message::SubmitAddProjectForm);
 
             assert!(app.config.projects.is_empty());
             assert!(app.add_form.visible);
@@ -836,6 +849,50 @@ mod tests {
                 cols: 100,
                 rows: 24,
             }]
+        );
+    }
+
+    #[test]
+    fn submit_add_project_form_adds_project_and_resets_form() {
+        with_temp_config_dir(|workspace_dir| {
+            let mut app = test_app();
+
+            let _ = app.update(Message::ShowAddProjectForm);
+            let _ = app.update(Message::FormNameChanged("Local project".into()));
+            let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
+            let _ = app.update(Message::SubmitAddProjectForm);
+
+            assert_eq!(app.config.projects.len(), 1);
+            assert_eq!(app.config.projects[0].name, "Local project");
+            assert_eq!(app.config.projects[0].working_dir, *workspace_dir);
+            assert!(!app.add_form.visible);
+            assert_eq!(app.add_form.selected_dir, None);
+        });
+    }
+
+    #[test]
+    fn submit_add_project_form_requires_selected_directory() {
+        let mut app = test_app();
+
+        let _ = app.update(Message::ShowAddProjectForm);
+        let _ = app.update(Message::FormNameChanged("Local project".into()));
+        let _ = app.update(Message::SubmitAddProjectForm);
+
+        assert!(app.config.projects.is_empty());
+        assert!(app.add_form.visible);
+    }
+
+    #[test]
+    fn project_folder_selected_none_preserves_existing_selection() {
+        let mut app = test_app();
+
+        let _ = app.update(Message::ShowAddProjectForm);
+        let _ = app.update(Message::ProjectFolderSelected(Some(std::path::PathBuf::from("/tmp/demo"))));
+        let _ = app.update(Message::ProjectFolderSelected(None));
+
+        assert_eq!(
+            app.add_form.selected_dir,
+            Some(std::path::PathBuf::from("/tmp/demo"))
         );
     }
 }
