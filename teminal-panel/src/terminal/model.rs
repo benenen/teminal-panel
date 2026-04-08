@@ -1,11 +1,7 @@
-use termwiz::cell::AttributeChange;
-use termwiz::color::ColorAttribute;
-use termwiz::escape::{
-    csi::{Cursor, Edit, EraseInDisplay, EraseInLine, Sgr, CSI},
-    parser::Parser,
-    Action, ControlCode,
-};
-use termwiz::surface::{Change, Position, Surface};
+use wezterm_term::Terminal;
+use wezterm_escape_parser::Parser;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalSize {
@@ -14,9 +10,8 @@ pub struct TerminalSize {
 }
 
 pub struct TerminalModel {
+    terminal: Terminal,
     parser: Parser,
-    surface: Surface,
-    size: TerminalSize,
     dirty: bool,
 }
 
