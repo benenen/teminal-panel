@@ -13,4 +13,5 @@ pub struct TerminalState {
     pub writer: Box<dyn std::io::Write + Send>,
     pub lifecycle: Option<pty::PtyLifecycle>,
     pub last_size: Option<model::TerminalSize>,
+    pub resize: Box<dyn Fn(model::TerminalSize) -> pty::PtyResult<()> + Send>,
 }

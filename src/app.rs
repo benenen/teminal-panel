@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const PTY_CHANNEL_CAPACITY: usize = 256;
+const TERMINAL_CELL_WIDTH: f32 = 8.0;
+const TERMINAL_CELL_HEIGHT: f32 = 16.0;
 
 pub struct App {
     pub config: AppConfig,
@@ -32,8 +34,15 @@ pub enum Message {
     SubmitAddForm,
     OpenTerminal(Uuid),
     PtyOutput(Uuid, Vec<u8>),
+    TerminalViewportChanged(Uuid, TerminalViewport),
     TerminalInput(Uuid, String),
     InputChanged(Uuid, String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerminalViewport {
+    pub width: f32,
+    pub height: f32,
 }
 
 impl App {
@@ -108,6 +117,12 @@ impl App {
                         agent_id,
                     ) {
                         Ok(handle) => {
+                            let crate::terminal::pty::PtyHandle {
+                                writer,
+                                lifecycle,
+                                controller,
+                            } = handle;
+
                             self.terminals.insert(
                                 agent_id,
                                 TerminalState {
@@ -115,9 +130,18 @@ impl App {
                                     agent_id,
                                     model: TerminalModel::new(80, 24),
                                     input_buf: String::new(),
-                                    writer: handle.writer,
-                                    lifecycle: Some(handle.lifecycle),
+                                    writer,
+                                    lifecycle: Some(lifecycle),
                                     last_size: None,
+                                    resize: Box::new(move |size| {
+                                        controller.resize(portable_pty::PtySize {
+                                            rows: size.rows,
+                                            cols: size.cols,
+                                            pixel_width: 0,
+                                            pixel_height: 0,
+                                        })?;
+                                        Ok(())
+                                    }),
                                 },
                             );
                         }
@@ -130,6 +154,26 @@ impl App {
             Message::PtyOutput(id, bytes) => {
                 if let Some(terminal) = self.terminals.get_mut(&id) {
                     terminal.model.advance_bytes(&bytes);
+                }
+            }
+            Message::TerminalViewportChanged(id, viewport) => {
+                if let Some(terminal) = self.terminals.get_mut(&id) {
+                    let Some(size) = terminal_size_for_viewport(viewport) else {
+                        return Task::none();
+                    };
+
+                    if terminal.last_size == Some(size) {
+                        return Task::none();
+                    }
+
+                    terminal.model.resize(size);
+
+                    if let Err(error) = (terminal.resize)(size) {
+                        eprintln!("Failed to resize PTY for terminal {id}: {error}");
+                        return Task::none();
+                    }
+
+                    terminal.last_size = Some(size);
                 }
             }
             Message::TerminalInput(id, input) => {
@@ -295,6 +339,21 @@ impl App {
     }
 }
 
+fn terminal_size_for_viewport(viewport: TerminalViewport) -> Option<crate::terminal::model::TerminalSize> {
+    if !viewport.width.is_finite() || !viewport.height.is_finite() {
+        return None;
+    }
+
+    let cols = (viewport.width / TERMINAL_CELL_WIDTH).floor() as u16;
+    let rows = (viewport.height / TERMINAL_CELL_HEIGHT).floor() as u16;
+
+    if cols == 0 || rows == 0 {
+        return None;
+    }
+
+    Some(crate::terminal::model::TerminalSize { cols, rows })
+}
+
 impl Drop for App {
     fn drop(&mut self) {
         for terminal in self.terminals.values_mut() {
@@ -305,7 +364,7 @@ impl Drop for App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Message};
+    use super::{App, Message, TerminalViewport};
     use crate::config::AppConfig;
     use crate::terminal::{
         model::TerminalModel, pty::PtyLifecycle, subscription::subscription_test_lock,
@@ -431,10 +490,42 @@ mod tests {
                 writer: Box::new(writer),
                 lifecycle,
                 last_size: None,
+                resize: Box::new(|_| Ok(())),
             },
         );
 
         bytes
+    }
+
+    fn insert_test_terminal_with_resize(
+        app: &mut App,
+        agent_id: Uuid,
+    ) -> Arc<Mutex<Vec<crate::terminal::model::TerminalSize>>> {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let resize_calls = calls.clone();
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = RecordingWriter {
+            bytes: bytes.clone(),
+        };
+
+        app.terminals.insert(
+            agent_id,
+            TerminalState {
+                id: agent_id,
+                agent_id,
+                model: TerminalModel::new(80, 24),
+                input_buf: String::new(),
+                writer: Box::new(writer),
+                lifecycle: None,
+                last_size: None,
+                resize: Box::new(move |size| {
+                    resize_calls.lock().expect("resize calls lock").push(size);
+                    Ok(())
+                }),
+            },
+        );
+
+        calls
     }
 
     fn with_temp_config_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
@@ -658,5 +749,35 @@ mod tests {
             }
             other => panic!("unexpected message from subscription: {other:?}"),
         }
+    }
+
+    #[test]
+    fn terminal_resize_requests_pty_resize_once_per_new_grid_size() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        let tracker = insert_test_terminal_with_resize(&mut app, agent_id);
+
+        let _ = app.update(Message::TerminalViewportChanged(
+            agent_id,
+            TerminalViewport {
+                width: 800.0,
+                height: 384.0,
+            },
+        ));
+        let _ = app.update(Message::TerminalViewportChanged(
+            agent_id,
+            TerminalViewport {
+                width: 800.0,
+                height: 384.0,
+            },
+        ));
+
+        assert_eq!(
+            tracker.lock().expect("tracker lock").as_slice(),
+            &[crate::terminal::model::TerminalSize {
+                cols: 100,
+                rows: 24,
+            }]
+        );
     }
 }
