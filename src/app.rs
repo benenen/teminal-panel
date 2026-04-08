@@ -199,7 +199,6 @@ impl App {
             Message::TerminalInput(id, input) => {
                 if let Some(terminal) = self.terminals.get_mut(&id) {
                     let _ = terminal.writer.write_all(input.as_bytes());
-                    let _ = terminal.writer.write_all(b"\n");
                     terminal.input_buf.clear();
                 }
             }
@@ -349,7 +348,7 @@ impl App {
             {
                 if let Some(terminal) = self.terminals.get(&selected_id) {
                     column![
-                        text(format!("Terminal: {}", project.name)).size(24),
+                        text(format!("Terminal: {}", project.name)).size(16),
                         container(render::terminal_view(
                             selected_id,
                             &terminal.model,
@@ -357,15 +356,6 @@ impl App {
                             move |ch| Message::TerminalInput(selected_id, ch),
                         ))
                         .height(Length::Fill),
-                        text_input("$ ...", &terminal.input_buf)
-                            .on_input(move |value| {
-                                Message::InputChanged(selected_id, value)
-                            })
-                            .on_submit(Message::TerminalInput(
-                                selected_id,
-                                terminal.input_buf.clone(),
-                            ))
-                            .font(iced::Font::MONOSPACE),
                     ]
                     .spacing(8)
                 } else {
@@ -715,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_input_writes_input_plus_newline_and_clears_buffer() {
+    fn terminal_input_writes_input_and_clears_buffer() {
         let mut app = test_app();
         let project_id = Uuid::new_v4();
         let bytes = insert_test_terminal(&mut app, project_id, None);
@@ -727,7 +717,7 @@ mod tests {
         let _ = app.update(Message::TerminalInput(project_id, "pwd".into()));
 
         let written = bytes.lock().expect("recording writer lock").clone();
-        assert_eq!(written, b"pwd\n");
+        assert_eq!(written, b"pwd");
         assert!(app
             .terminals
             .get(&project_id)
