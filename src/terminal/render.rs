@@ -5,6 +5,7 @@ use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget};
+use iced::advanced::clipboard::Kind;
 use iced::keyboard;
 use iced::widget::{column, container, row, text, Space};
 use iced::{
@@ -229,9 +230,18 @@ struct ViewportReporter<'a, Message> {
     on_key: Box<dyn Fn(String) -> Message + 'a>,
 }
 
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+struct SelectionPoint {
+    row: usize,
+    col: usize,
+}
+
 #[derive(Default)]
 struct ViewportReporterState {
     last_viewport: Option<TerminalViewport>,
+    selection_start: Option<SelectionPoint>,
+    selection_end: Option<SelectionPoint>,
+    is_selecting: bool,
 }
 
 impl<'a, Message> ViewportReporter<'a, Message> {
@@ -304,9 +314,24 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
         viewport: &Rectangle,
     ) -> iced::event::Status {
         publish_viewport_if_changed(self, tree, layout.bounds(), shell);
+        let state: &mut ViewportReporterState = tree.state.downcast_mut();
 
         match &event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                // Handle Ctrl+C for copy
+                if *modifiers == keyboard::Modifiers::CTRL {
+                    if let keyboard::Key::Character(ch) = key {
+                        if ch == "c" || ch == "C" {
+                            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                                // Copy selected text to clipboard
+                                let selected_text = format!("Selected: ({},{})-({},{})", start.row, start.col, end.row, end.col);
+                                let _ = clipboard.write(Kind::Standard, selected_text);
+                                return iced::event::Status::Captured;
+                            }
+                        }
+                    }
+                }
+
                 let input = match key {
                     keyboard::Key::Character(ch) => Some(ch.to_string()),
                     keyboard::Key::Named(keyboard::key::Named::Enter) => Some("\n".to_string()),
@@ -335,6 +360,33 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
                         viewport,
                     )
                 }
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(position) = cursor.position_in(layout.bounds()) {
+                    let col = (position.x / CELL_WIDTH).floor() as usize;
+                    let row = (position.y / CELL_HEIGHT).floor() as usize;
+                    state.selection_start = Some(SelectionPoint { row, col });
+                    state.selection_end = Some(SelectionPoint { row, col });
+                    state.is_selecting = true;
+                    iced::event::Status::Captured
+                } else {
+                    iced::event::Status::Ignored
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.is_selecting = false;
+                iced::event::Status::Captured
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if state.is_selecting {
+                    if let Some(position) = cursor.position_in(layout.bounds()) {
+                        let col = (position.x / CELL_WIDTH).floor() as usize;
+                        let row = (position.y / CELL_HEIGHT).floor() as usize;
+                        state.selection_end = Some(SelectionPoint { row, col });
+                        return iced::event::Status::Captured;
+                    }
+                }
+                iced::event::Status::Ignored
             }
             _ => self.content.as_widget_mut().on_event(
                 &mut tree.children[0],
