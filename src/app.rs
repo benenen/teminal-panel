@@ -678,6 +678,49 @@ mod tests {
     }
 
     #[test]
+    fn pty_output_advances_terminal_model_screen() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, agent_id, None);
+
+        let _ = app.update(Message::PtyOutput(agent_id, b"hi".to_vec()));
+
+        let surface = app
+            .terminals
+            .get(&agent_id)
+            .expect("terminal exists")
+            .model
+            .surface();
+        assert!(surface.screen_chars_to_string().starts_with("hi"));
+    }
+
+    #[test]
+    fn ansi_output_updates_surface_instead_of_literal_escape_text() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, agent_id, None);
+
+        let _ = app.update(Message::PtyOutput(agent_id, b"\x1b[31mR".to_vec()));
+
+        let cells = app
+            .terminals
+            .get(&agent_id)
+            .expect("terminal exists")
+            .model
+            .surface()
+            .screen_lines();
+        assert_eq!(cells[0].visible_cells().next().expect("cell").str(), "R");
+        assert!(!app
+            .terminals
+            .get(&agent_id)
+            .expect("terminal exists")
+            .model
+            .surface()
+            .screen_chars_to_string()
+            .contains("[31m"));
+    }
+
+    #[test]
     fn removing_selected_agent_shuts_down_terminal_lifecycle() {
         with_temp_config_dir(|workspace_dir: &PathBuf| {
             let mut app = test_app();
