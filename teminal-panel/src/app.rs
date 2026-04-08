@@ -175,7 +175,7 @@ impl App {
             }
             Message::PtyOutput(id, bytes) => {
                 if let Some(terminal) = self.terminals.get_mut(&id) {
-                    terminal.model.advance_bytes(&bytes);
+                    terminal.model.process_output(&bytes);
                 }
             }
             Message::TerminalViewportChanged(id, viewport) => {
