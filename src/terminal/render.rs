@@ -307,8 +307,8 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
 
         match &event {
             Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                if let keyboard::Key::Character(ch) = key {
-                    shell.publish((self.on_key)(ch.to_string()));
+                if let keyboard::Key::Named(keyboard::key::Named::Enter) = key {
+                    shell.publish((self.on_key)("\n".to_string()));
                     iced::event::Status::Captured
                 } else {
                     self.content.as_widget_mut().on_event(
