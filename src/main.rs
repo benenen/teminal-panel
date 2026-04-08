@@ -1,4 +1,4 @@
-mod agent;
+mod project;
 mod app;
 mod config;
 mod terminal;

@@ -1,4 +1,4 @@
-use crate::agent::{panel::AddAgentForm, Agent};
+use crate::agent::{panel::AddProjectForm, Project};
 use crate::config::AppConfig;
 use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
@@ -13,20 +13,20 @@ const PTY_CHANNEL_CAPACITY: usize = 256;
 
 pub struct App {
     pub config: AppConfig,
-    pub selected_agent: Option<Uuid>,
-    pub add_form: AddAgentForm,
+    pub selected_project: Option<Uuid>,
+    pub add_form: AddProjectForm,
     pub terminals: HashMap<Uuid, TerminalState>,
     pub pty_tx: mpsc::Sender<(Uuid, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    SelectAgent(Uuid),
-    AddAgent { name: String, working_dir: String },
-    RemoveAgent(Uuid),
-    AgentStatusChanged(Uuid, String),
-    ShowAddForm,
-    HideAddForm,
+    SelectProject(Uuid),
+    AddProject { name: String, working_dir: String },
+    RemoveProject(Uuid),
+    ProjectStatusChanged(Uuid, String),
+    ShowAddProjectForm,
+    HideAddProjectForm,
     FormNameChanged(String),
     FormDirChanged(String),
     SubmitAddForm,
@@ -52,7 +52,7 @@ impl App {
         (
             Self {
                 config,
-                selected_agent: None,
+                selected_project: None,
                 add_form: Default::default(),
                 terminals: HashMap::new(),
                 pty_tx,
@@ -63,30 +63,30 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::SelectAgent(id) => {
-                self.selected_agent = Some(id);
+            Message::SelectProject(id) => {
+                self.selected_project = Some(id);
             }
-            Message::AddAgent { name, working_dir } => {
-                self.add_local_agent(name, working_dir);
+            Message::AddProject { name, working_dir } => {
+                self.add_local_project(name, working_dir);
             }
-            Message::RemoveAgent(id) => {
-                self.config.agents.retain(|agent| agent.id != id);
+            Message::RemoveProject(id) => {
+                self.config.projects.retain(|project| project.id != id);
 
                 if let Some(mut terminal) = self.terminals.remove(&id) {
                     Self::shutdown_terminal(&mut terminal);
                 }
 
-                if self.selected_agent == Some(id) {
-                    self.selected_agent = None;
+                if self.selected_project == Some(id) {
+                    self.selected_project = None;
                 }
 
                 self.config.save();
             }
-            Message::AgentStatusChanged(_, _) => {}
-            Message::ShowAddForm => {
+            Message::ProjectStatusChanged(_, _) => {}
+            Message::ShowAddProjectForm => {
                 self.add_form.visible = true;
             }
-            Message::HideAddForm => {
+            Message::HideAddProjectForm => {
                 self.add_form = Default::default();
             }
             Message::FormNameChanged(value) => {
@@ -96,23 +96,28 @@ impl App {
                 self.add_form.working_dir = value;
             }
             Message::SubmitAddForm => {
-                if self.add_local_agent(
+                if self.add_local_project(
                     self.add_form.name.clone(),
                     self.add_form.working_dir.clone(),
                 ) {
                     self.add_form = Default::default();
                 }
             }
-            Message::OpenTerminal(agent_id) => {
-                if self.terminals.contains_key(&agent_id) {
+            Message::OpenTerminal(project_id) => {
+                if self.terminals.contains_key(&project_id) {
                     return Task::none();
                 }
 
-                if let Some(agent) = self.config.agents.iter().find(|agent| agent.id == agent_id) {
+                if let Some(project) = self
+                    .config
+                    .projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                {
                     match crate::terminal::pty::spawn_shell(
-                        &agent.working_dir,
+                        &project.working_dir,
                         self.pty_tx.clone(),
-                        agent_id,
+                        project_id,
                     ) {
                         Ok(handle) => {
                             let crate::terminal::pty::PtyHandle {
@@ -122,10 +127,10 @@ impl App {
                             } = handle;
 
                             self.terminals.insert(
-                                agent_id,
+                                project_id,
                                 TerminalState {
-                                    id: agent_id,
-                                    agent_id,
+                                    id: project_id,
+                                    agent_id: project_id,
                                     model: TerminalModel::new(80, 24),
                                     input_buf: String::new(),
                                     writer,
@@ -191,7 +196,7 @@ impl App {
         Task::none()
     }
 
-    fn add_local_agent(&mut self, name: String, working_dir: String) -> bool {
+    fn add_local_project(&mut self, name: String, working_dir: String) -> bool {
         let name = name.trim().to_string();
         let working_dir = working_dir.trim().to_string();
 
@@ -204,7 +209,7 @@ impl App {
             return false;
         }
 
-        self.config.agents.push(Agent::new_local(name, working_dir));
+        self.config.projects.push(Project::new_local(name, working_dir));
         self.config.save();
         true
     }
@@ -217,17 +222,17 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        row![self.view_agent_panel(), self.view_terminal_area()]
+        row![self.view_project_panel(), self.view_terminal_area()]
             .spacing(16)
             .padding(16)
             .into()
     }
 
-    fn view_agent_panel(&self) -> Element<'_, Message> {
-        let agent_list = self.config.agents.iter().fold(column![], |column, agent| {
+    fn view_project_panel(&self) -> Element<'_, Message> {
+        let project_list = self.config.projects.iter().fold(column![], |column, project| {
             let details = column![
-                text(&agent.name).size(16),
-                text(agent.working_dir.display().to_string()).size(12)
+                text(&project.name).size(16),
+                text(project.working_dir.display().to_string()).size(12)
             ]
             .spacing(2)
             .width(Length::Fill);
@@ -236,8 +241,8 @@ impl App {
                 row![
                     button(details)
                         .width(Length::Fill)
-                        .on_press(Message::SelectAgent(agent.id)),
-                    button(text("x")).on_press(Message::RemoveAgent(agent.id)),
+                        .on_press(Message::SelectProject(project.id)),
+                    button(text("x")).on_press(Message::RemoveProject(project.id)),
                 ]
                 .spacing(6),
             )
@@ -253,22 +258,22 @@ impl App {
                     .on_submit(Message::SubmitAddForm),
                 row![
                     button(text("Add")).on_press(Message::SubmitAddForm),
-                    button(text("Cancel")).on_press(Message::HideAddForm),
+                    button(text("Cancel")).on_press(Message::HideAddProjectForm),
                 ]
                 .spacing(6),
             ]
             .spacing(6)
             .into()
         } else {
-            button(text("+ Add Agent"))
-                .on_press(Message::ShowAddForm)
+            button(text("+ Add Project"))
+                .on_press(Message::ShowAddProjectForm)
                 .into()
         };
 
         container(
             column![
-                text("Agents").size(24),
-                scrollable(agent_list.spacing(8)).height(Length::Fill),
+                text("Projects").size(24),
+                scrollable(project_list.spacing(8)).height(Length::Fill),
                 add_section,
             ]
             .spacing(12),
@@ -279,16 +284,16 @@ impl App {
     }
 
     fn view_terminal_area(&self) -> Element<'_, Message> {
-        let content = if let Some(selected_id) = self.selected_agent {
-            if let Some(agent) = self
+        let content = if let Some(selected_id) = self.selected_project {
+            if let Some(project) = self
                 .config
-                .agents
+                .projects
                 .iter()
-                .find(|agent| agent.id == selected_id)
+                .find(|project| project.id == selected_id)
             {
                 if let Some(terminal) = self.terminals.get(&selected_id) {
                     column![
-                        text(format!("Terminal: {}", agent.name)).size(24),
+                        text(format!("Terminal: {}", project.name)).size(24),
                         container(render::terminal_view(
                             selected_id,
                             &terminal.model,
@@ -296,31 +301,34 @@ impl App {
                         ))
                         .height(Length::Fill),
                         text_input("$ ...", &terminal.input_buf)
-                            .on_input(move |value| Message::InputChanged(selected_id, value))
+                            .on_input(move |value| {
+                                Message::InputChanged(selected_id, value)
+                            })
                             .on_submit(Message::TerminalInput(
                                 selected_id,
-                                terminal.input_buf.clone()
+                                terminal.input_buf.clone(),
                             ))
                             .font(iced::Font::MONOSPACE),
                     ]
                     .spacing(8)
                 } else {
                     column![
-                        text(format!("Agent: {}", agent.name)).size(24),
-                        button(text("Open Terminal")).on_press(Message::OpenTerminal(selected_id)),
+                        text(format!("Project: {}", project.name)).size(24),
+                        button(text("Open Terminal"))
+                            .on_press(Message::OpenTerminal(selected_id)),
                     ]
                     .spacing(8)
                 }
             } else {
                 column![
-                    text("Agent not found").size(24),
-                    text("Select an agent to open a terminal")
+                    text("Project not found").size(24),
+                    text("Select a project to open a terminal")
                 ]
                 .spacing(8)
             }
         } else {
             column![
-                text("Select an agent to open a terminal").size(24),
+                text("Select a project to open a terminal").size(24),
                 text("Terminal area placeholder"),
             ]
             .spacing(8)
@@ -467,7 +475,7 @@ mod tests {
         let (pty_tx, _pty_rx) = mpsc::channel(super::PTY_CHANNEL_CAPACITY);
         App {
             config: AppConfig::default(),
-            selected_agent: None,
+            selected_project: None,
             add_form: Default::default(),
             terminals: HashMap::new(),
             pty_tx,
@@ -476,7 +484,7 @@ mod tests {
 
     fn insert_test_terminal(
         app: &mut App,
-        agent_id: Uuid,
+        project_id: Uuid,
         lifecycle: Option<PtyLifecycle>,
     ) -> Arc<Mutex<Vec<u8>>> {
         let bytes = Arc::new(Mutex::new(Vec::new()));
@@ -485,10 +493,10 @@ mod tests {
         };
 
         app.terminals.insert(
-            agent_id,
+            project_id,
             TerminalState {
-                id: agent_id,
-                agent_id,
+                id: project_id,
+                agent_id: project_id,
                 model: TerminalModel::new(80, 24),
                 input_buf: String::new(),
                 writer: Box::new(writer),
@@ -503,7 +511,7 @@ mod tests {
 
     fn insert_test_terminal_with_resize(
         app: &mut App,
-        agent_id: Uuid,
+        project_id: Uuid,
     ) -> Arc<Mutex<Vec<crate::terminal::model::TerminalSize>>> {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let resize_calls = calls.clone();
@@ -513,10 +521,10 @@ mod tests {
         };
 
         app.terminals.insert(
-            agent_id,
+            project_id,
             TerminalState {
-                id: agent_id,
-                agent_id,
+                id: project_id,
+                agent_id: project_id,
                 model: TerminalModel::new(80, 24),
                 input_buf: String::new(),
                 writer: Box::new(writer),
@@ -555,10 +563,10 @@ mod tests {
     }
 
     #[test]
-    fn show_and_hide_add_form_updates_visibility_and_resets_fields() {
+    fn show_and_hide_add_project_form_updates_visibility_and_resets_fields() {
         let mut app = test_app();
 
-        let _ = app.update(Message::ShowAddForm);
+        let _ = app.update(Message::ShowAddProjectForm);
         assert!(app.add_form.visible);
 
         let _ = app.update(Message::FormNameChanged("Local agent".into()));
@@ -566,33 +574,36 @@ mod tests {
         assert_eq!(app.add_form.name, "Local agent");
         assert_eq!(app.add_form.working_dir, "/tmp/work");
 
-        let _ = app.update(Message::HideAddForm);
+        let _ = app.update(Message::HideAddProjectForm);
         assert!(!app.add_form.visible);
         assert!(app.add_form.name.is_empty());
         assert!(app.add_form.working_dir.is_empty());
     }
 
     #[test]
-    fn submit_add_form_adds_agent_and_resets_form() {
+    fn submit_add_form_adds_project_and_resets_form() {
         with_temp_config_dir(|workspace_dir: &PathBuf| {
             let mut app = test_app();
             let working_dir = workspace_dir.display().to_string();
 
-            let _ = app.update(Message::ShowAddForm);
+            let _ = app.update(Message::ShowAddProjectForm);
             let _ = app.update(Message::FormNameChanged("Local agent".into()));
             let _ = app.update(Message::FormDirChanged(working_dir.clone()));
             let _ = app.update(Message::SubmitAddForm);
 
-            assert_eq!(app.config.agents.len(), 1);
-            assert_eq!(app.config.agents[0].name, "Local agent");
-            assert_eq!(app.config.agents[0].working_dir, workspace_dir.clone());
+            assert_eq!(app.config.projects.len(), 1);
+            assert_eq!(app.config.projects[0].name, "Local agent");
+            assert_eq!(
+                app.config.projects[0].working_dir,
+                workspace_dir.clone()
+            );
             assert!(!app.add_form.visible);
             assert!(app.add_form.name.is_empty());
             assert!(app.add_form.working_dir.is_empty());
 
             let persisted = AppConfig::load();
-            assert_eq!(persisted.agents.len(), 1);
-            assert_eq!(persisted.agents[0].name, "Local agent");
+            assert_eq!(persisted.projects.len(), 1);
+            assert_eq!(persisted.projects[0].name, "Local agent");
         });
     }
 
@@ -601,49 +612,49 @@ mod tests {
         with_temp_config_dir(|_| {
             let mut app = test_app();
 
-            let _ = app.update(Message::ShowAddForm);
+            let _ = app.update(Message::ShowAddProjectForm);
             let _ = app.update(Message::FormNameChanged("Local agent".into()));
             let _ = app.update(Message::FormDirChanged("/tmp/missing-directory".into()));
             let _ = app.update(Message::SubmitAddForm);
 
-            assert!(app.config.agents.is_empty());
+            assert!(app.config.projects.is_empty());
             assert!(app.add_form.visible);
-            assert!(AppConfig::load().agents.is_empty());
+            assert!(AppConfig::load().projects.is_empty());
         });
     }
 
     #[test]
-    fn removing_selected_agent_clears_selection() {
+    fn removing_selected_project_clears_selection() {
         with_temp_config_dir(|workspace_dir: &PathBuf| {
             let mut app = test_app();
 
-            let _ = app.update(Message::AddAgent {
+            let _ = app.update(Message::AddProject {
                 name: "Local agent".into(),
                 working_dir: workspace_dir.display().to_string(),
             });
 
-            let agent_id = app.config.agents[0].id;
-            let _ = app.update(Message::SelectAgent(agent_id));
-            assert_eq!(app.selected_agent, Some(agent_id));
+            let project_id = app.config.projects[0].id;
+            let _ = app.update(Message::SelectProject(project_id));
+            assert_eq!(app.selected_project, Some(project_id));
 
-            let _ = app.update(Message::RemoveAgent(agent_id));
-            assert!(app.config.agents.is_empty());
-            assert_eq!(app.selected_agent, None);
-            assert!(AppConfig::load().agents.is_empty());
+            let _ = app.update(Message::RemoveProject(project_id));
+            assert!(app.config.projects.is_empty());
+            assert_eq!(app.selected_project, None);
+            assert!(AppConfig::load().projects.is_empty());
         });
     }
 
     #[test]
     fn input_changed_updates_terminal_input_buffer() {
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
+        let project_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, project_id, None);
 
-        let _ = app.update(Message::InputChanged(agent_id, "echo hi".into()));
+        let _ = app.update(Message::InputChanged(project_id, "echo hi".into()));
 
         assert_eq!(
             app.terminals
-                .get(&agent_id)
+                .get(&project_id)
                 .expect("terminal exists")
                 .input_buf,
             "echo hi"
@@ -653,20 +664,20 @@ mod tests {
     #[test]
     fn terminal_input_writes_input_plus_newline_and_clears_buffer() {
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let bytes = insert_test_terminal(&mut app, agent_id, None);
+        let project_id = Uuid::new_v4();
+        let bytes = insert_test_terminal(&mut app, project_id, None);
         app.terminals
-            .get_mut(&agent_id)
+            .get_mut(&project_id)
             .expect("terminal exists")
             .input_buf = "pending".into();
 
-        let _ = app.update(Message::TerminalInput(agent_id, "pwd".into()));
+        let _ = app.update(Message::TerminalInput(project_id, "pwd".into()));
 
         let written = bytes.lock().expect("recording writer lock").clone();
         assert_eq!(written, b"pwd\n");
         assert!(app
             .terminals
-            .get(&agent_id)
+            .get(&project_id)
             .expect("terminal exists")
             .input_buf
             .is_empty());
@@ -682,14 +693,14 @@ mod tests {
     #[test]
     fn pty_output_advances_terminal_model_screen() {
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
+        let project_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, project_id, None);
 
-        let _ = app.update(Message::PtyOutput(agent_id, b"hi".to_vec()));
+        let _ = app.update(Message::PtyOutput(project_id, b"hi".to_vec()));
 
         let surface = app
             .terminals
-            .get(&agent_id)
+            .get(&project_id)
             .expect("terminal exists")
             .model
             .surface();
@@ -699,14 +710,14 @@ mod tests {
     #[test]
     fn ansi_output_updates_surface_instead_of_literal_escape_text() {
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
+        let project_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, project_id, None);
 
-        let _ = app.update(Message::PtyOutput(agent_id, b"\x1b[31mR".to_vec()));
+        let _ = app.update(Message::PtyOutput(project_id, b"\x1b[31mR".to_vec()));
 
         let cells = app
             .terminals
-            .get(&agent_id)
+            .get(&project_id)
             .expect("terminal exists")
             .model
             .surface()
@@ -714,7 +725,7 @@ mod tests {
         assert_eq!(cells[0].visible_cells().next().expect("cell").str(), "R");
         assert!(!app
             .terminals
-            .get(&agent_id)
+            .get(&project_id)
             .expect("terminal exists")
             .model
             .surface()
@@ -723,22 +734,22 @@ mod tests {
     }
 
     #[test]
-    fn removing_selected_agent_shuts_down_terminal_lifecycle() {
+    fn removing_selected_project_shuts_down_terminal_lifecycle() {
         with_temp_config_dir(|workspace_dir: &PathBuf| {
             let mut app = test_app();
 
-            let _ = app.update(Message::AddAgent {
+            let _ = app.update(Message::AddProject {
                 name: "Local agent".into(),
                 working_dir: workspace_dir.display().to_string(),
             });
 
-            let agent_id = app.config.agents[0].id;
+            let project_id = app.config.projects[0].id;
             let child = RecordingChild::default();
             let child_state = child.state.clone();
             let lifecycle = PtyLifecycle::new(Box::new(child));
-            let _ = insert_test_terminal(&mut app, agent_id, Some(lifecycle));
+            let _ = insert_test_terminal(&mut app, project_id, Some(lifecycle));
 
-            let _ = app.update(Message::RemoveAgent(agent_id));
+            let _ = app.update(Message::RemoveProject(project_id));
 
             let state = child_state.lock().expect("recording child lock");
             assert_eq!(state.killed, 1);
@@ -752,9 +763,9 @@ mod tests {
         let child_state = child.state.clone();
 
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
         let lifecycle = PtyLifecycle::new(Box::new(child));
-        let _ = insert_test_terminal(&mut app, agent_id, Some(lifecycle));
+        let _ = insert_test_terminal(&mut app, project_id, Some(lifecycle));
 
         drop(app);
 
@@ -801,18 +812,18 @@ mod tests {
     #[test]
     fn terminal_resize_requests_pty_resize_once_per_new_grid_size() {
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let tracker = insert_test_terminal_with_resize(&mut app, agent_id);
+        let project_id = Uuid::new_v4();
+        let tracker = insert_test_terminal_with_resize(&mut app, project_id);
 
         let _ = app.update(Message::TerminalViewportChanged(
-            agent_id,
+            project_id,
             TerminalViewport {
                 width: 800.0,
                 height: 384.0,
             },
         ));
         let _ = app.update(Message::TerminalViewportChanged(
-            agent_id,
+            project_id,
             TerminalViewport {
                 width: 800.0,
                 height: 384.0,

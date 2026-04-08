@@ -4,3 +4,4 @@ pub struct AddProjectForm {
     pub working_dir: String,
     pub visible: bool,
 }
+

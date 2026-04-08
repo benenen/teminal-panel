@@ -1,4 +1,4 @@
-use crate::agent::Agent as Project;
+use crate::project::Project;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -6,16 +6,16 @@ use std::path::PathBuf;
 pub struct AppConfig {
     #[serde(default)]
     pub projects: Vec<Project>,
-    #[serde(skip)]
-    pub agents: Vec<Project>,
 }
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("teminal-panel")
-            .join("config.toml")
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| dirs::config_dir())
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        base.join("teminal-panel").join("config.toml")
     }
 
     pub fn load() -> Self {
@@ -29,14 +29,13 @@ impl AppConfig {
     }
 
     fn from_compat(compat: AppConfigCompat) -> Self {
-        let mut projects = compat.projects;
-        if projects.is_empty() {
-            projects = compat.agents;
-        }
-        Self {
-            projects: projects.clone(),
-            agents: projects,
-        }
+        let projects = if compat.projects.is_empty() {
+            compat.agents
+        } else {
+            compat.projects
+        };
+
+        Self { projects }
     }
 
     pub fn save(&self) {
@@ -44,9 +43,7 @@ impl AppConfig {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let mut serializable = self.clone();
-        serializable.projects = self.agents.clone();
-        if let Ok(content) = toml::to_string_pretty(&serializable) {
+        if let Ok(content) = toml::to_string_pretty(self) {
             let _ = std::fs::write(&path, content);
         }
     }
@@ -65,10 +62,7 @@ mod tests {
     use super::*;
 
     fn config_with_projects(projects: Vec<Project>) -> AppConfig {
-        AppConfig {
-            projects: projects.clone(),
-            agents: projects,
-        }
+        AppConfig { projects }
     }
  
     #[test]
