@@ -45,15 +45,15 @@ The application follows a unidirectional data flow:
 
 ### Module Structure
 
-- **app.rs**: Main application state, message handling, and UI layout. Contains the `App` struct with `update()` and `view()` methods. This is the central hub.
-- **config.rs**: Configuration persistence (TOML format, stored in `~/.config/teminal-panel/config.toml`). Handles loading/saving projects. Includes backward compatibility for legacy "agents" field.
-- **agent/mod.rs**: `Project` struct definition with connection types (Local, SSH). Projects have UUID, name, working directory, connection config, and status.
-- **agent/panel.rs**: UI components for the "Add Project" form.
-- **terminal/**: Terminal emulation and PTY management
-  - **model.rs**: `TerminalModel` - screen buffer and ANSI escape sequence parsing
-  - **pty.rs**: PTY spawning, lifecycle management, and process control
-  - **render.rs**: Converts terminal model to Iced canvas rendering
-  - **subscription.rs**: Iced subscription that streams PTY output as messages
+- **ui/** - Reusable UI component library
+  - **components/** - Button, TextInput wrappers
+  - **containers/** - Modal, Container components
+  - **theme.rs** - Color scheme and styling
+- **teminal-panel/** - Main application
+  - **app.rs** - Main application state and UI layout
+  - **config.rs** - Configuration persistence (TOML format)
+  - **project/** - Project struct definition
+  - **terminal/** - Terminal emulation and PTY management
 
 ### Key Data Structures
 
