@@ -1,6 +1,6 @@
 use crate::agent::{panel::AddAgentForm, Agent};
 use crate::config::AppConfig;
-use crate::terminal::{subscription, TerminalState};
+use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length, Task, Theme};
 use std::collections::HashMap;
@@ -32,8 +32,15 @@ pub enum Message {
     SubmitAddForm,
     OpenTerminal(Uuid),
     PtyOutput(Uuid, Vec<u8>),
+    TerminalViewportChanged(Uuid, TerminalViewport),
     TerminalInput(Uuid, String),
     InputChanged(Uuid, String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerminalViewport {
+    pub width: f32,
+    pub height: f32,
 }
 
 impl App {
@@ -108,16 +115,31 @@ impl App {
                         agent_id,
                     ) {
                         Ok(handle) => {
+                            let crate::terminal::pty::PtyHandle {
+                                writer,
+                                lifecycle,
+                                controller,
+                            } = handle;
+
                             self.terminals.insert(
                                 agent_id,
                                 TerminalState {
                                     id: agent_id,
                                     agent_id,
-                                    output: String::new(),
+                                    model: TerminalModel::new(80, 24),
                                     input_buf: String::new(),
-                                    pending_bytes: Vec::new(),
-                                    writer: handle.writer,
-                                    lifecycle: Some(handle.lifecycle),
+                                    writer,
+                                    lifecycle: Some(lifecycle),
+                                    last_size: None,
+                                    resize: Box::new(move |size| {
+                                        controller.resize(portable_pty::PtySize {
+                                            rows: size.rows,
+                                            cols: size.cols,
+                                            pixel_width: 0,
+                                            pixel_height: 0,
+                                        })?;
+                                        Ok(())
+                                    }),
                                 },
                             );
                         }
@@ -129,12 +151,27 @@ impl App {
             }
             Message::PtyOutput(id, bytes) => {
                 if let Some(terminal) = self.terminals.get_mut(&id) {
-                    Self::append_output_bytes(
-                        &mut terminal.output,
-                        &mut terminal.pending_bytes,
-                        &bytes,
-                    );
-                    Self::trim_output_to_last_chars(&mut terminal.output, 10_000);
+                    terminal.model.advance_bytes(&bytes);
+                }
+            }
+            Message::TerminalViewportChanged(id, viewport) => {
+                if let Some(terminal) = self.terminals.get_mut(&id) {
+                    let Some(size) = terminal_size_for_viewport(viewport) else {
+                        return Task::none();
+                    };
+
+                    if terminal.last_size == Some(size) {
+                        return Task::none();
+                    }
+
+                    terminal.model.resize(size);
+
+                    if let Err(error) = (terminal.resize)(size) {
+                        eprintln!("Failed to resize PTY for terminal {id}: {error}");
+                        return Task::none();
+                    }
+
+                    terminal.last_size = Some(size);
                 }
             }
             Message::TerminalInput(id, input) => {
@@ -152,58 +189,6 @@ impl App {
         }
 
         Task::none()
-    }
-
-    fn trim_output_to_last_chars(output: &mut String, max_chars: usize) {
-        let total_chars = output.chars().count();
-        if total_chars <= max_chars {
-            return;
-        }
-
-        if let Some((start, _)) = output.char_indices().nth(total_chars - max_chars) {
-            *output = output[start..].to_string();
-        }
-    }
-
-    fn append_output_bytes(output: &mut String, pending_bytes: &mut Vec<u8>, bytes: &[u8]) {
-        pending_bytes.extend_from_slice(bytes);
-
-        loop {
-            match std::str::from_utf8(pending_bytes) {
-                Ok(valid) => {
-                    output.push_str(valid);
-                    pending_bytes.clear();
-                    break;
-                }
-                Err(error) => {
-                    let valid_up_to = error.valid_up_to();
-
-                    if valid_up_to > 0 {
-                        let valid = std::str::from_utf8(&pending_bytes[..valid_up_to])
-                            .expect("valid UTF-8 prefix");
-                        output.push_str(valid);
-                    }
-
-                    match error.error_len() {
-                        Some(invalid_len) => {
-                            let invalid_end = valid_up_to + invalid_len;
-                            output.push_str(&String::from_utf8_lossy(
-                                &pending_bytes[valid_up_to..invalid_end],
-                            ));
-                            pending_bytes.drain(..invalid_end);
-
-                            if pending_bytes.is_empty() {
-                                break;
-                            }
-                        }
-                        None => {
-                            pending_bytes.drain(..valid_up_to);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     fn add_local_agent(&mut self, name: String, working_dir: String) -> bool {
@@ -304,8 +289,12 @@ impl App {
                 if let Some(terminal) = self.terminals.get(&selected_id) {
                     column![
                         text(format!("Terminal: {}", agent.name)).size(24),
-                        scrollable(text(&terminal.output).font(iced::Font::MONOSPACE))
-                            .height(Length::Fill),
+                        container(render::terminal_view(
+                            selected_id,
+                            &terminal.model,
+                            move |viewport| Message::TerminalViewportChanged(selected_id, viewport),
+                        ))
+                        .height(Length::Fill),
                         text_input("$ ...", &terminal.input_buf)
                             .on_input(move |value| Message::InputChanged(selected_id, value))
                             .on_submit(Message::TerminalInput(
@@ -352,6 +341,23 @@ impl App {
     }
 }
 
+fn terminal_size_for_viewport(
+    viewport: TerminalViewport,
+) -> Option<crate::terminal::model::TerminalSize> {
+    if !viewport.width.is_finite() || !viewport.height.is_finite() {
+        return None;
+    }
+
+    let cols = (viewport.width / render::CELL_WIDTH).floor() as u16;
+    let rows = (viewport.height / render::CELL_HEIGHT).floor() as u16;
+
+    if cols == 0 || rows == 0 {
+        return None;
+    }
+
+    Some(crate::terminal::model::TerminalSize { cols, rows })
+}
+
 impl Drop for App {
     fn drop(&mut self) {
         for terminal in self.terminals.values_mut() {
@@ -362,9 +368,12 @@ impl Drop for App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Message};
+    use super::{App, Message, TerminalViewport};
     use crate::config::AppConfig;
-    use crate::terminal::{pty::PtyLifecycle, subscription::subscription_test_lock, TerminalState};
+    use crate::terminal::{
+        model::TerminalModel, pty::PtyLifecycle, subscription::subscription_test_lock,
+        TerminalState,
+    };
     use iced::advanced::subscription::into_recipes;
     use iced::futures::StreamExt;
     use portable_pty::{Child, ChildKiller, ExitStatus};
@@ -480,15 +489,47 @@ mod tests {
             TerminalState {
                 id: agent_id,
                 agent_id,
-                output: String::new(),
+                model: TerminalModel::new(80, 24),
                 input_buf: String::new(),
-                pending_bytes: Vec::new(),
                 writer: Box::new(writer),
                 lifecycle,
+                last_size: None,
+                resize: Box::new(|_| Ok(())),
             },
         );
 
         bytes
+    }
+
+    fn insert_test_terminal_with_resize(
+        app: &mut App,
+        agent_id: Uuid,
+    ) -> Arc<Mutex<Vec<crate::terminal::model::TerminalSize>>> {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let resize_calls = calls.clone();
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = RecordingWriter {
+            bytes: bytes.clone(),
+        };
+
+        app.terminals.insert(
+            agent_id,
+            TerminalState {
+                id: agent_id,
+                agent_id,
+                model: TerminalModel::new(80, 24),
+                input_buf: String::new(),
+                writer: Box::new(writer),
+                lifecycle: None,
+                last_size: None,
+                resize: Box::new(move |size| {
+                    resize_calls.lock().expect("resize calls lock").push(size);
+                    Ok(())
+                }),
+            },
+        );
+
+        calls
     }
 
     fn with_temp_config_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
@@ -632,51 +673,53 @@ mod tests {
     }
 
     #[test]
-    fn pty_output_keeps_last_ten_thousand_chars() {
-        let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
-
-        let _ = app.update(Message::PtyOutput(agent_id, vec![b'a'; 15_000]));
-
-        let output = &app
-            .terminals
-            .get(&agent_id)
-            .expect("terminal exists")
-            .output;
-        assert_eq!(output.len(), 10_000);
-        assert!(output.chars().all(|ch| ch == 'a'));
-    }
-
-    #[test]
-    fn pty_output_preserves_split_utf8_sequences() {
-        let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
-
-        let _ = app.update(Message::PtyOutput(agent_id, vec![0xE4, 0xBD]));
-        assert!(app
-            .terminals
-            .get(&agent_id)
-            .expect("terminal exists")
-            .output
-            .is_empty());
-
-        let _ = app.update(Message::PtyOutput(agent_id, vec![0xA0]));
-        assert_eq!(
-            app.terminals
-                .get(&agent_id)
-                .expect("terminal exists")
-                .output,
-            "你"
-        );
-    }
-
-    #[test]
     fn open_terminal_without_matching_agent_is_noop() {
         let mut app = test_app();
         let _ = app.update(Message::OpenTerminal(Uuid::new_v4()));
         assert!(app.terminals.is_empty());
+    }
+
+    #[test]
+    fn pty_output_advances_terminal_model_screen() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, agent_id, None);
+
+        let _ = app.update(Message::PtyOutput(agent_id, b"hi".to_vec()));
+
+        let surface = app
+            .terminals
+            .get(&agent_id)
+            .expect("terminal exists")
+            .model
+            .surface();
+        assert!(surface.screen_chars_to_string().starts_with("hi"));
+    }
+
+    #[test]
+    fn ansi_output_updates_surface_instead_of_literal_escape_text() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        let _ = insert_test_terminal(&mut app, agent_id, None);
+
+        let _ = app.update(Message::PtyOutput(agent_id, b"\x1b[31mR".to_vec()));
+
+        let cells = app
+            .terminals
+            .get(&agent_id)
+            .expect("terminal exists")
+            .model
+            .surface()
+            .screen_lines();
+        assert_eq!(cells[0].visible_cells().next().expect("cell").str(), "R");
+        assert!(!app
+            .terminals
+            .get(&agent_id)
+            .expect("terminal exists")
+            .model
+            .surface()
+            .screen_chars_to_string()
+            .contains("[31m"));
     }
 
     #[test]
@@ -753,5 +796,35 @@ mod tests {
             }
             other => panic!("unexpected message from subscription: {other:?}"),
         }
+    }
+
+    #[test]
+    fn terminal_resize_requests_pty_resize_once_per_new_grid_size() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        let tracker = insert_test_terminal_with_resize(&mut app, agent_id);
+
+        let _ = app.update(Message::TerminalViewportChanged(
+            agent_id,
+            TerminalViewport {
+                width: 800.0,
+                height: 384.0,
+            },
+        ));
+        let _ = app.update(Message::TerminalViewportChanged(
+            agent_id,
+            TerminalViewport {
+                width: 800.0,
+                height: 384.0,
+            },
+        ));
+
+        assert_eq!(
+            tracker.lock().expect("tracker lock").as_slice(),
+            &[crate::terminal::model::TerminalSize {
+                cols: 100,
+                rows: 24,
+            }]
+        );
     }
 }
