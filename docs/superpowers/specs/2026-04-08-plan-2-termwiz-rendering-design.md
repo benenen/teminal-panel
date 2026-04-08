@@ -38,12 +38,12 @@ The new architecture keeps PTY transport and terminal emulation separate:
 
 1. `src/terminal/pty.rs` remains responsible for spawning the shell, reading and writing PTY bytes, and adds an explicit resize API.
 2. A new terminal model layer owns a `termwiz::escape::parser::Parser`, a `termwiz::surface::Surface`, and the metadata needed to render and resize them safely.
-3. A new terminal renderer layer converts the surface state into `iced` drawing primitives using a fixed cell grid.
+3. A new terminal renderer layer converts the surface state into a fixed-grid `iced` widget tree with explicit per-cell styling.
 4. `src/app.rs` continues to orchestrate application state, but PTY bytes are forwarded into the terminal model instead of appended into a raw output buffer.
 
 Data flow:
 
-`PTY bytes -> termwiz parser -> local action-to-surface adapter -> termwiz surface -> iced renderer`
+`PTY bytes -> termwiz parser -> local action-to-surface adapter -> termwiz surface -> fixed-grid iced renderer`
 
 This keeps terminal semantics inside the emulator while the UI remains a thin rendering and layout layer.
 
@@ -155,7 +155,7 @@ Planned file decomposition:
 - Create `src/terminal/model.rs`
   - Own the `termwiz` parser, `Surface`, and ANSI action application logic
 - Create `src/terminal/render.rs`
-  - Convert terminal screen state into an `iced`-renderable grid or canvas program
+- Convert terminal screen state into an `iced`-renderable fixed-grid widget tree
 - Modify `src/app.rs`
   - Route PTY output into the terminal model
   - Track viewport-derived rows/cols updates
@@ -201,7 +201,7 @@ Under Xvfb or a normal desktop session, validate:
 
 ### `iced` rendering tradeoffs
 
-`iced` does not ship a terminal widget. The renderer may need to use `canvas` or a custom widget path. The implementation should start with a fixed-grid renderer rather than trying to solve perfect text shaping in this phase.
+`iced` does not ship a terminal widget. The renderer therefore uses a fixed-grid custom composition of rows, containers, and text widgets, plus a tiny viewport-reporting wrapper. This phase deliberately avoids perfect text shaping in favor of stable redraw and resize behavior.
 
 ### Resize feedback loops
 

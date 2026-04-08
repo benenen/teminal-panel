@@ -437,9 +437,9 @@ pub fn terminal_view<'a>(
 ) -> iced::Element<'a, crate::app::Message>
 ```
 
-- [ ] **Step 3: Implement the renderer with a custom widget or canvas**
+- [ ] **Step 3: Implement the renderer with a fixed-grid custom widget tree**
 
-Use `iced::widget::canvas` if it remains the smallest working path.
+Prefer a fixed-grid composition of rows, containers, and text widgets. Avoid `canvas` if it causes stale glyphs or awkward resize reporting.
 
 The draw logic should:
 
@@ -475,7 +475,7 @@ on_resize(TerminalViewport {
 })
 ```
 
-If `canvas` alone is awkward for resize reporting, wrap it in a tiny custom widget that can publish `TerminalViewportChanged`.
+Wrap the renderer in a tiny custom widget that can publish `TerminalViewportChanged`.
 
 - [ ] **Step 5: Replace the raw output widget in `src/app.rs`**
 
