@@ -1,5 +1,6 @@
 use wezterm_term::Terminal;
 use wezterm_escape_parser::parser::Parser;
+use wezterm_cell::UnicodeVersion;
 use std::sync::Arc;
 use std::io::Write;
 
@@ -58,9 +59,10 @@ impl wezterm_term::TerminalConfiguration for DummyConfig {
         Default::default()
     }
 
-    fn unicode_version(&self) -> wezterm_term::config::UnicodeVersion {
-        // Placeholder - UnicodeVersion is private in wezterm_term
-        // This will be fixed when the trait is properly exposed
+    fn unicode_version(&self) -> UnicodeVersion {
+        // SAFETY: UnicodeVersion is a struct in wezterm_cell.
+        // We use zeroed() as a placeholder since the trait requires returning this type.
+        // This is a temporary workaround until wezterm_term exposes a public constructor.
         unsafe { std::mem::zeroed() }
     }
 
