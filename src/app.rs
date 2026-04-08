@@ -1,6 +1,6 @@
 use crate::agent::{panel::AddAgentForm, Agent};
 use crate::config::AppConfig;
-use crate::terminal::{subscription, TerminalState};
+use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length, Task, Theme};
 use std::collections::HashMap;
@@ -113,11 +113,11 @@ impl App {
                                 TerminalState {
                                     id: agent_id,
                                     agent_id,
-                                    output: String::new(),
+                                    model: TerminalModel::new(80, 24),
                                     input_buf: String::new(),
-                                    pending_bytes: Vec::new(),
                                     writer: handle.writer,
                                     lifecycle: Some(handle.lifecycle),
+                                    last_size: None,
                                 },
                             );
                         }
@@ -129,12 +129,7 @@ impl App {
             }
             Message::PtyOutput(id, bytes) => {
                 if let Some(terminal) = self.terminals.get_mut(&id) {
-                    Self::append_output_bytes(
-                        &mut terminal.output,
-                        &mut terminal.pending_bytes,
-                        &bytes,
-                    );
-                    Self::trim_output_to_last_chars(&mut terminal.output, 10_000);
+                    terminal.model.advance_bytes(&bytes);
                 }
             }
             Message::TerminalInput(id, input) => {
@@ -152,58 +147,6 @@ impl App {
         }
 
         Task::none()
-    }
-
-    fn trim_output_to_last_chars(output: &mut String, max_chars: usize) {
-        let total_chars = output.chars().count();
-        if total_chars <= max_chars {
-            return;
-        }
-
-        if let Some((start, _)) = output.char_indices().nth(total_chars - max_chars) {
-            *output = output[start..].to_string();
-        }
-    }
-
-    fn append_output_bytes(output: &mut String, pending_bytes: &mut Vec<u8>, bytes: &[u8]) {
-        pending_bytes.extend_from_slice(bytes);
-
-        loop {
-            match std::str::from_utf8(pending_bytes) {
-                Ok(valid) => {
-                    output.push_str(valid);
-                    pending_bytes.clear();
-                    break;
-                }
-                Err(error) => {
-                    let valid_up_to = error.valid_up_to();
-
-                    if valid_up_to > 0 {
-                        let valid = std::str::from_utf8(&pending_bytes[..valid_up_to])
-                            .expect("valid UTF-8 prefix");
-                        output.push_str(valid);
-                    }
-
-                    match error.error_len() {
-                        Some(invalid_len) => {
-                            let invalid_end = valid_up_to + invalid_len;
-                            output.push_str(&String::from_utf8_lossy(
-                                &pending_bytes[valid_up_to..invalid_end],
-                            ));
-                            pending_bytes.drain(..invalid_end);
-
-                            if pending_bytes.is_empty() {
-                                break;
-                            }
-                        }
-                        None => {
-                            pending_bytes.drain(..valid_up_to);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     fn add_local_agent(&mut self, name: String, working_dir: String) -> bool {
@@ -304,7 +247,7 @@ impl App {
                 if let Some(terminal) = self.terminals.get(&selected_id) {
                     column![
                         text(format!("Terminal: {}", agent.name)).size(24),
-                        scrollable(text(&terminal.output).font(iced::Font::MONOSPACE))
+                        scrollable(render::terminal_view(selected_id, &terminal.model))
                             .height(Length::Fill),
                         text_input("$ ...", &terminal.input_buf)
                             .on_input(move |value| Message::InputChanged(selected_id, value))
@@ -364,7 +307,10 @@ impl Drop for App {
 mod tests {
     use super::{App, Message};
     use crate::config::AppConfig;
-    use crate::terminal::{pty::PtyLifecycle, subscription::subscription_test_lock, TerminalState};
+    use crate::terminal::{
+        model::TerminalModel, pty::PtyLifecycle, subscription::subscription_test_lock,
+        TerminalState,
+    };
     use iced::advanced::subscription::into_recipes;
     use iced::futures::StreamExt;
     use portable_pty::{Child, ChildKiller, ExitStatus};
@@ -480,11 +426,11 @@ mod tests {
             TerminalState {
                 id: agent_id,
                 agent_id,
-                output: String::new(),
+                model: TerminalModel::new(80, 24),
                 input_buf: String::new(),
-                pending_bytes: Vec::new(),
                 writer: Box::new(writer),
                 lifecycle,
+                last_size: None,
             },
         );
 
@@ -629,47 +575,6 @@ mod tests {
             .expect("terminal exists")
             .input_buf
             .is_empty());
-    }
-
-    #[test]
-    fn pty_output_keeps_last_ten_thousand_chars() {
-        let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
-
-        let _ = app.update(Message::PtyOutput(agent_id, vec![b'a'; 15_000]));
-
-        let output = &app
-            .terminals
-            .get(&agent_id)
-            .expect("terminal exists")
-            .output;
-        assert_eq!(output.len(), 10_000);
-        assert!(output.chars().all(|ch| ch == 'a'));
-    }
-
-    #[test]
-    fn pty_output_preserves_split_utf8_sequences() {
-        let mut app = test_app();
-        let agent_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, agent_id, None);
-
-        let _ = app.update(Message::PtyOutput(agent_id, vec![0xE4, 0xBD]));
-        assert!(app
-            .terminals
-            .get(&agent_id)
-            .expect("terminal exists")
-            .output
-            .is_empty());
-
-        let _ = app.update(Message::PtyOutput(agent_id, vec![0xA0]));
-        assert_eq!(
-            app.terminals
-                .get(&agent_id)
-                .expect("terminal exists")
-                .output,
-            "你"
-        );
     }
 
     #[test]
