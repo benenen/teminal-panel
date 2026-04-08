@@ -8,7 +8,7 @@ Integrate a real terminal emulator into the existing local PTY flow so the right
 
 Included in this phase:
 
-- Full ANSI/VT output handling through `wezterm-term`
+- Full ANSI/VT output handling through `termwiz`
 - Screen rendering based on terminal cells, colors, and cursor state
 - PTY resize synchronization driven by terminal viewport changes
 - Preservation of the existing local PTY lifecycle and output subscription pipeline
@@ -37,13 +37,13 @@ The current terminal view stores a raw `String` and renders it inside a scrollab
 The new architecture keeps PTY transport and terminal emulation separate:
 
 1. `src/terminal/pty.rs` remains responsible for spawning the shell, reading and writing PTY bytes, and adds an explicit resize API.
-2. A new terminal model layer owns a `wezterm_term::Terminal` instance plus metadata needed to render and resize it safely.
-3. A new terminal renderer layer converts the emulated screen state into `iced` drawing primitives using a fixed cell grid.
+2. A new terminal model layer owns a `termwiz::escape::parser::Parser`, a `termwiz::surface::Surface`, and the metadata needed to render and resize them safely.
+3. A new terminal renderer layer converts the surface state into `iced` drawing primitives using a fixed cell grid.
 4. `src/app.rs` continues to orchestrate application state, but PTY bytes are forwarded into the terminal model instead of appended into a raw output buffer.
 
 Data flow:
 
-`PTY bytes -> terminal model -> wezterm-term screen state -> iced renderer`
+`PTY bytes -> termwiz parser -> local action-to-surface adapter -> termwiz surface -> iced renderer`
 
 This keeps terminal semantics inside the emulator while the UI remains a thin rendering and layout layer.
 
@@ -68,12 +68,15 @@ It also gains:
 
 The emulation side will own:
 
-- A `wezterm_term::Terminal`
+- A `termwiz` parser
+- A `termwiz` surface
 - The current logical terminal size in rows/cols
 - Cached viewport metrics used by the renderer
 - Enough dirtiness metadata to know when a redraw is needed
 
-The raw `String output` field will be removed from `TerminalState`. The model becomes the source of truth for visible content, cursor location, and scrollback-backed screen state.
+The raw `String output` field will be removed from `TerminalState`. The model becomes the source of truth for visible content, cursor location, and surface-backed screen state.
+
+Because `wezterm-term` is not published as a normal crates.io dependency, this phase uses the published `termwiz` crate directly and adds a narrow local adapter that maps parsed ANSI actions onto a `Surface`.
 
 ## Rendering Strategy
 
@@ -144,13 +147,13 @@ Error handling stays conservative:
 Planned file decomposition:
 
 - Modify `Cargo.toml`
-  - Add the terminal emulator dependency and any small supporting crates needed for rendering state
+- Add the `termwiz` dependency and any small supporting crates needed for rendering state
 - Modify `src/terminal/mod.rs`
   - Replace raw text-oriented terminal state with model-oriented session state
 - Modify `src/terminal/pty.rs`
   - Add PTY resize support
 - Create `src/terminal/model.rs`
-  - Own the `wezterm-term` terminal instance and byte-advance logic
+  - Own the `termwiz` parser, `Surface`, and ANSI action application logic
 - Create `src/terminal/render.rs`
   - Convert terminal screen state into an `iced`-renderable grid or canvas program
 - Modify `src/app.rs`
@@ -192,9 +195,9 @@ Under Xvfb or a normal desktop session, validate:
 
 ## Risks
 
-### `wezterm-term` integration details
+### `termwiz` integration details
 
-The exact API surface for constructing and advancing terminal state may require adaptation once the crate is integrated. To contain that risk, the terminal model must isolate library-specific details behind a narrow local interface.
+`termwiz` provides the parser and screen primitives we need, but not a drop-in emulator object matching the original design wording. To contain that risk, the terminal model must isolate parser-to-surface adaptation behind a narrow local interface.
 
 ### `iced` rendering tradeoffs
 
