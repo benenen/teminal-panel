@@ -13,5 +13,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["full"] }
 dirs = "5"
 once_cell = "1"
-termwiz = "0.23.3"
+wezterm-term = { git = "https://github.com/wezterm/wezterm", branch = "main" }
+wezterm-escape-parser = { git = "https://github.com/wezterm/wezterm", branch = "main" }
 rfd = "0.17.2"
