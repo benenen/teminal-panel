@@ -188,7 +188,7 @@ impl App {
                         return Task::none();
                     }
 
-                    terminal.model.resize(size);
+                    let _ = terminal.model.resize(size);
 
                     if let Err(error) = (terminal.resize)(size) {
                         eprintln!("Failed to resize PTY for terminal {id}: {error}");
