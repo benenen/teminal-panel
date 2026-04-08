@@ -1,13 +1,15 @@
 use crate::project::{panel::AddProjectForm, Project};
 use crate::config::AppConfig;
 use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Length, Task, Theme};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use teminal_ui::components::{Button, TextInput};
+use teminal_ui::containers::Modal;
 
 const PTY_CHANNEL_CAPACITY: usize = 256;
 
@@ -244,42 +246,36 @@ impl App {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "No folder selected".into());
 
-            let modal = container(
-                column![
-                    text("Add Project").size(20),
-                    text_input("Project Name", &self.add_form.name)
-                        .on_input(Message::FormNameChanged)
-                        .on_submit(Message::SubmitAddProjectForm),
-                    row![
-                        text(selected_dir).size(12),
-                        button(text("Choose Folder"))
-                            .on_press(Message::ChooseProjectFolder),
-                    ]
-                    .spacing(8)
-                    .align_y(iced::alignment::Vertical::Center),
-                    row![
-                        button(text("Add"))
-                            .width(Length::Fill)
-                            .on_press(Message::SubmitAddProjectForm),
-                        button(text("Cancel"))
-                            .width(Length::Fill)
-                            .on_press(Message::HideAddProjectForm),
-                    ]
-                    .spacing(8),
+            let form_content = column![
+                TextInput::new("Project Name", &self.add_form.name)
+                    .on_input(Message::FormNameChanged)
+                    .on_submit(Message::SubmitAddProjectForm)
+                    .into_element(),
+                row![
+                    text(selected_dir).size(12),
+                    Button::new("Choose Folder")
+                        .on_press(Message::ChooseProjectFolder)
+                        .into_element(),
                 ]
-                .spacing(16)
-                .padding(20)
-            )
-            .width(Length::Fixed(400.0))
-            .style(|_| {
-                container::Style::default()
-                    .background(iced::Color::from_rgb8(45, 45, 45))
-                    .border(iced::Border {
-                        color: iced::Color::from_rgb8(100, 100, 100),
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    })
-            });
+                .spacing(8)
+                .align_y(iced::alignment::Vertical::Center),
+                row![
+                    Button::new("Add")
+                        .width(Length::Fill)
+                        .on_press(Message::SubmitAddProjectForm)
+                        .into_element(),
+                    Button::new("Cancel")
+                        .width(Length::Fill)
+                        .on_press(Message::HideAddProjectForm)
+                        .into_element(),
+                ]
+                .spacing(8),
+            ]
+            .spacing(16);
+
+            let modal = Modal::new(form_content.into())
+                .with_title("Add Project")
+                .into_element();
 
             let overlay = container(modal)
                 .width(Length::Fill)
@@ -327,9 +323,10 @@ impl App {
             column![
                 text("Projects").size(24),
                 scrollable(project_list.spacing(8)).height(Length::Fill),
-                button(text("+ Add Project"))
+                Button::new("+ Add Project")
                     .width(Length::Fill)
-                    .on_press(Message::ShowAddProjectForm),
+                    .on_press(Message::ShowAddProjectForm)
+                    .into_element(),
             ]
             .spacing(12),
         )
