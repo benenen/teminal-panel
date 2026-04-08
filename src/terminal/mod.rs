@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 pub struct TerminalState {
     pub id: Uuid,
-    pub agent_id: Uuid,
+    pub project_id: Uuid,
     pub model: model::TerminalModel,
     pub input_buf: String,
     pub writer: Box<dyn std::io::Write + Send>,

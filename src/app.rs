@@ -130,7 +130,7 @@ impl App {
                                 project_id,
                                 TerminalState {
                                     id: project_id,
-                                    agent_id: project_id,
+                                    project_id: project_id,
                                     model: TerminalModel::new(80, 24),
                                     input_buf: String::new(),
                                     writer,
@@ -496,7 +496,7 @@ mod tests {
             project_id,
             TerminalState {
                 id: project_id,
-                agent_id: project_id,
+                project_id: project_id,
                 model: TerminalModel::new(80, 24),
                 input_buf: String::new(),
                 writer: Box::new(writer),
@@ -524,7 +524,7 @@ mod tests {
             project_id,
             TerminalState {
                 id: project_id,
-                agent_id: project_id,
+                project_id: project_id,
                 model: TerminalModel::new(80, 24),
                 input_buf: String::new(),
                 writer: Box::new(writer),
