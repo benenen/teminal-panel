@@ -11,9 +11,9 @@ use iced::widget::{column, container, row, text, Space};
 use iced::{
     alignment, Color, Element, Event, Font, Length, Pixels, Rectangle, Renderer, Size, Theme,
 };
-use termwiz::cell::{CellAttributes, Intensity, Underline};
-use termwiz::color::{ColorAttribute, SrgbaTuple};
-use termwiz::surface::CursorVisibility;
+use wezterm_term::Terminal;
+use wezterm_term::color::ColorAttribute;
+use wezterm_cell::{Intensity, Underline, CellAttributes};
 use uuid::Uuid;
 
 pub const CELL_WIDTH: f32 = 8.0;
@@ -165,13 +165,11 @@ fn map_color(color: ColorAttribute, is_background: bool) -> Color {
             }
         }
         ColorAttribute::PaletteIndex(index) => palette_index_to_color(index),
-        ColorAttribute::TrueColorWithDefaultFallback(color)
-        | ColorAttribute::TrueColorWithPaletteFallback(color, _) => srgb_to_iced(color),
+        _ => {
+            // Handle other color variants (TrueColor, etc.)
+            DEFAULT_FOREGROUND
+        }
     }
-}
-
-fn srgb_to_iced(color: SrgbaTuple) -> Color {
-    Color::from_rgba(color.0, color.1, color.2, color.3)
 }
 
 fn palette_index_to_color(index: u8) -> Color {
@@ -470,7 +468,7 @@ fn publish_viewport_if_changed<Message>(
 mod tests {
     use super::map_color;
     use iced::Color;
-    use termwiz::color::ColorAttribute;
+    use wezterm_term::color::ColorAttribute;
 
     #[test]
     fn color_attribute_mapping_preserves_basic_ansi_colors() {
