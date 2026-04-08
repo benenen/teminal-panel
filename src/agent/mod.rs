@@ -58,3 +58,5 @@ impl Agent {
         }
     }
 }
+
+pub mod panel;
