@@ -3709,10 +3709,18 @@ dependencies = [
  "portable-pty",
  "rfd",
  "serde",
+ "teminal-ui",
  "termwiz",
  "tokio",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "teminal-ui"
+version = "0.1.0"
+dependencies = [
+ "iced",
 ]
 
 [[package]]

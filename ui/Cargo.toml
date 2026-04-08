@@ -1,0 +1,7 @@
+[package]
+name = "teminal-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio", "advanced", "canvas"] }
