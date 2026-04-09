@@ -1,5 +1,5 @@
 use crate::app::{Message, TerminalViewport};
-use crate::terminal::model::TerminalModel;
+use crate::terminal::model::{TerminalCluster, TerminalCursor, TerminalModel};
 use iced::advanced::clipboard::Kind;
 use iced::advanced::layout;
 use iced::advanced::mouse;
@@ -7,20 +7,43 @@ use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget};
 use iced::keyboard;
-use iced::widget::{column, container, row, text, Space};
+use iced::widget::{column, container, row, text};
 use iced::{
     alignment, Color, Element, Event, Font, Length, Pixels, Rectangle, Renderer, Size, Theme,
 };
 use uuid::Uuid;
-use wezterm_cell::{CellAttributes, Intensity, Underline};
+#[cfg(test)]
 use wezterm_term::color::ColorAttribute;
 
+#[cfg(windows)]
 pub const CELL_WIDTH: f32 = 8.0;
+#[cfg(not(windows))]
+pub const CELL_WIDTH: f32 = 8.0;
+
+#[cfg(windows)]
+pub const CELL_HEIGHT: f32 = 18.0;
+#[cfg(not(windows))]
 pub const CELL_HEIGHT: f32 = 16.0;
+
+#[cfg(windows)]
+pub const FONT_SIZE: f32 = 16.0;
+#[cfg(not(windows))]
 pub const FONT_SIZE: f32 = 14.0;
 
 const DEFAULT_FOREGROUND: Color = Color::from_rgb(229.0 / 255.0, 229.0 / 255.0, 229.0 / 255.0);
 const DEFAULT_BACKGROUND: Color = Color::from_rgb(30.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0);
+
+pub fn terminal_font() -> Font {
+    #[cfg(windows)]
+    {
+        return Font::with_name("SimSun");
+    }
+
+    #[cfg(not(windows))]
+    {
+        Font::MONOSPACE
+    }
+}
 
 pub fn terminal_view<'a>(
     _terminal_id: Uuid,
@@ -28,95 +51,121 @@ pub fn terminal_view<'a>(
     on_resize: impl Fn(TerminalViewport) -> Message + 'a,
     on_key: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let _terminal = model.surface();
+    let lines = model.visible_rows();
+    let cursor = model.cursor();
     let mut rows = column![].spacing(0);
 
-    // For now, render a simple placeholder
-    // TODO: Properly iterate through screen lines once API is clarified
-    for _ in 0..24 {
-        let cells = row![].spacing(0);
-        rows = rows.push(container(cells).height(Length::Fixed(CELL_HEIGHT)));
+    for (row_index, line) in lines.into_iter().enumerate() {
+        rows = rows.push(render_line(line, row_index, cursor, model));
     }
 
     ViewportReporter::new(
-        container(rows).width(Length::Fill).height(Length::Fill),
+        container(rows)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style::default().background(DEFAULT_BACKGROUND)),
         on_resize,
         on_key,
     )
     .into()
 }
 
-fn render_cell<'a>(content: String, attrs: &CellAttributes, _width: usize) -> Element<'a, Message> {
-    let (foreground, background) = resolved_colors(attrs);
+fn render_line<'a>(
+    line: Vec<TerminalCluster>,
+    row_index: usize,
+    cursor: Option<TerminalCursor>,
+    model: &TerminalModel,
+) -> Element<'a, Message> {
+    let cols = model.cols();
+    let mut line_row = row![].spacing(0);
+    let mut next_col = 0;
 
-    let underline_height = if attrs.underline() == Underline::None {
-        0.0
-    } else {
-        2.0
-    };
-    let text_height = (CELL_HEIGHT - underline_height).max(0.0);
+    for cell in line {
+        while next_col < cell.col && next_col < cols {
+            line_row = line_row.push(render_cell(
+                " ".into(),
+                1,
+                cursor
+                    == Some(TerminalCursor {
+                        row: row_index,
+                        col: next_col,
+                    }),
+            ));
+            next_col += 1;
+        }
+
+        if next_col >= cols {
+            break;
+        }
+
+        let width = cell.width.min(cols.saturating_sub(next_col)).max(1);
+        line_row = line_row.push(render_cell(
+            cell.text,
+            width,
+            cursor
+                == Some(TerminalCursor {
+                    row: row_index,
+                    col: next_col,
+                }),
+        ));
+        next_col += width;
+    }
+
+    while next_col < cols {
+        line_row = line_row.push(render_cell(
+            " ".into(),
+            1,
+            cursor
+                == Some(TerminalCursor {
+                    row: row_index,
+                    col: next_col,
+                }),
+        ));
+        next_col += 1;
+    }
+
+    container(line_row)
+        .width(Length::Fill)
+        .height(Length::Fixed(CELL_HEIGHT))
+        .style(|_| container::Style::default().background(DEFAULT_BACKGROUND))
+        .into()
+}
+
+fn render_cell<'a>(content: String, width: usize, is_cursor: bool) -> Element<'a, Message> {
     let display = if content.is_empty() {
         " ".to_string()
     } else {
         content
     };
-    let text = text(display)
-        .font(Font::MONOSPACE)
-        .size(Pixels(FONT_SIZE))
-        .width(Length::Fill)
-        .height(Length::Fixed(text_height))
-        .align_x(alignment::Horizontal::Left);
+    let foreground = if is_cursor {
+        DEFAULT_BACKGROUND
+    } else {
+        DEFAULT_FOREGROUND
+    };
+    let background = if is_cursor {
+        DEFAULT_FOREGROUND
+    } else {
+        DEFAULT_BACKGROUND
+    };
 
-    let mut body = column![container(text)
-        .width(Length::Fill)
-        .height(Length::Fixed(text_height))
-        .style(move |_| {
-            container::Style::default()
-                .color(foreground)
-                .background(background)
-        })]
-    .spacing(0);
-
-    if underline_height > 0.0 {
-        body = body.push(
-            container(Space::with_width(Length::Fill))
-                .width(Length::Fill)
-                .height(Length::Fixed(underline_height))
-                .style(move |_| container::Style::default().background(foreground)),
-        );
-    }
-
-    container(body)
-        .width(Length::Fixed(CELL_WIDTH))
-        .height(Length::Fixed(CELL_HEIGHT))
-        .style(move |_| container::Style::default().background(background))
-        .into()
+    container(
+        text(display)
+            .font(terminal_font())
+            .size(Pixels(FONT_SIZE))
+            .width(Length::Fill)
+            .align_x(alignment::Horizontal::Left),
+    )
+    .width(Length::Fixed(CELL_WIDTH * width as f32))
+    .height(Length::Fixed(CELL_HEIGHT))
+    .style(move |_| {
+        container::Style::default()
+            .color(foreground)
+            .background(background)
+    })
+    .into()
 }
 
-fn resolved_colors(attrs: &CellAttributes) -> (Color, Color) {
-    let mut foreground = map_color(attrs.foreground(), false);
-    let mut background = map_color(attrs.background(), true);
-
-    if attrs.reverse() {
-        std::mem::swap(&mut foreground, &mut background);
-    }
-
-    if attrs.intensity() == Intensity::Bold {
-        foreground = brighten(foreground);
-    }
-
-    (foreground, background)
-}
-
-fn brighten(color: Color) -> Color {
-    Color {
-        r: (color.r * 1.2).min(1.0),
-        g: (color.g * 1.2).min(1.0),
-        b: (color.b * 1.2).min(1.0),
-        a: color.a,
-    }
-}
-
+#[cfg(test)]
 fn map_color(color: ColorAttribute, is_background: bool) -> Color {
     match color {
         ColorAttribute::Default => {
@@ -134,6 +183,7 @@ fn map_color(color: ColorAttribute, is_background: bool) -> Color {
     }
 }
 
+#[cfg(test)]
 fn palette_index_to_color(index: u8) -> Color {
     let (red, green, blue) = match index {
         0 => (0, 0, 0),
@@ -173,6 +223,7 @@ fn palette_index_to_color(index: u8) -> Color {
     Color::from_rgb8(red, green, blue)
 }
 
+#[cfg(test)]
 fn xterm_color_cube(value: u8) -> u8 {
     match value {
         0 => 0,
@@ -277,7 +328,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
         let state: &mut ViewportReporterState = tree.state.downcast_mut();
 
         match &event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                text,
+                ..
+            }) => {
                 // Handle Ctrl+C for copy
                 if *modifiers == keyboard::Modifiers::CTRL {
                     if let keyboard::Key::Character(ch) = key {
@@ -297,9 +353,16 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
                     }
                 }
 
-                let input = match key {
-                    keyboard::Key::Character(ch) => Some(ch.to_string()),
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => Some("\n".to_string()),
+                let text_input = if !modifiers.control() && !modifiers.alt() && !modifiers.logo() {
+                    text.as_ref()
+                        .filter(|text| !text.is_empty())
+                        .map(|text| text.to_string())
+                } else {
+                    None
+                };
+
+                let input = text_input.or_else(|| match key {
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => Some("\r".to_string()),
                     keyboard::Key::Named(keyboard::key::Named::Backspace) => {
                         Some("\x08".to_string())
                     }
@@ -317,8 +380,13 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
                     keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
                         Some("\x1b[D".to_string())
                     }
+                    keyboard::Key::Character(ch)
+                        if !modifiers.control() && !modifiers.alt() && !modifiers.logo() =>
+                    {
+                        Some(ch.to_string())
+                    }
                     _ => None,
-                };
+                });
 
                 if let Some(input) = input {
                     shell.publish((self.on_key)(input));

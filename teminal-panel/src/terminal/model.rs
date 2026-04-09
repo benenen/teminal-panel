@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::sync::Arc;
+use termwiz::surface::CursorVisibility;
 use wezterm_cell::UnicodeVersion;
 use wezterm_escape_parser::parser::Parser;
 use wezterm_term::Terminal;
@@ -8,6 +9,19 @@ use wezterm_term::Terminal;
 pub struct TerminalSize {
     pub cols: u16,
     pub rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalCluster {
+    pub col: usize,
+    pub text: String,
+    pub width: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalCursor {
+    pub row: usize,
+    pub col: usize,
 }
 
 #[allow(private_interfaces)]
@@ -128,8 +142,68 @@ impl TerminalModel {
         self.dirty = true;
     }
 
-    pub fn surface(&self) -> &Terminal {
-        &self.terminal
+    pub fn visible_rows(&self) -> Vec<Vec<TerminalCluster>> {
+        let size = self.terminal.get_size();
+        let screen = self.terminal.screen();
+        let start = screen.phys_row(0);
+
+        screen
+            .lines_in_phys_range(start..start + size.rows)
+            .into_iter()
+            .map(|line| {
+                line.cluster(None)
+                    .into_iter()
+                    .map(|cluster| TerminalCluster {
+                        col: cluster.first_cell_idx,
+                        text: cluster.text,
+                        width: cluster.width.max(1),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    pub fn visible_text_rows(&self) -> Vec<String> {
+        self.visible_rows()
+            .into_iter()
+            .map(|row| {
+                let mut text = String::new();
+                let mut next_col = 0;
+
+                for cell in row {
+                    while next_col < cell.col {
+                        text.push(' ');
+                        next_col += 1;
+                    }
+
+                    text.push_str(&cell.text);
+                    next_col += cell.width;
+                }
+
+                text
+            })
+            .collect()
+    }
+
+    pub fn cursor(&self) -> Option<TerminalCursor> {
+        let cursor = self.terminal.cursor_pos();
+        if cursor.visibility != CursorVisibility::Visible {
+            return None;
+        }
+
+        let size = self.terminal.get_size();
+        if cursor.y < 0 || cursor.y as usize >= size.rows || cursor.x >= size.cols {
+            return None;
+        }
+
+        Some(TerminalCursor {
+            row: cursor.y as usize,
+            col: cursor.x,
+        })
+    }
+
+    pub fn cols(&self) -> usize {
+        self.terminal.get_size().cols
     }
 
     pub fn resize(&mut self, size: TerminalSize) -> Result<(), String> {
@@ -154,7 +228,7 @@ impl TerminalModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalModel, TerminalSize};
+    use super::{TerminalCluster, TerminalModel, TerminalSize};
 
     #[test]
     fn new_creates_terminal() {
@@ -188,5 +262,68 @@ mod tests {
         assert!(model.is_dirty());
         model.mark_clean();
         assert!(!model.is_dirty());
+    }
+
+    #[test]
+    fn process_output_populates_visible_text_rows() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process_output(b"hello");
+
+        let joined = model.visible_text_rows().join("\n");
+        assert!(joined.contains("hello"), "visible rows: {joined:?}");
+    }
+
+    #[test]
+    fn visible_rows_preserve_cluster_columns() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process_output(b"abc");
+
+        assert_eq!(
+            model.visible_rows()[0],
+            vec![TerminalCluster {
+                col: 0,
+                text: "abc".into(),
+                width: 3
+            }]
+        );
+    }
+
+    #[test]
+    fn visible_rows_preserve_double_width_clusters() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process_output("中".as_bytes());
+
+        assert_eq!(
+            model.visible_rows()[0],
+            vec![TerminalCluster {
+                col: 0,
+                text: "中".into(),
+                width: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn cursor_respects_visibility() {
+        let model = TerminalModel::new(80, 24);
+
+        assert_eq!(
+            model.cursor(),
+            Some(super::TerminalCursor { row: 0, col: 0 })
+        );
+    }
+
+    #[test]
+    fn visible_text_rows_expand_cluster_widths() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process_output("中a".as_bytes());
+
+        let first = &model.visible_text_rows()[0];
+        assert!(first.starts_with("中a"), "first row: {first:?}");
+        let total_width: usize = model.visible_rows()[0]
+            .iter()
+            .map(|cluster| cluster.width)
+            .sum();
+        assert_eq!(total_width, 3);
     }
 }

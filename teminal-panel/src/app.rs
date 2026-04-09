@@ -1,24 +1,20 @@
 use crate::config::AppConfig;
 use crate::project::{panel::AddProjectForm, Project};
-use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
+use crate::terminal::{settings_for_working_dir, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Length, Task, Theme};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 use teminal_ui::components::{Button, TextInput};
 use teminal_ui::containers::Modal;
-use tokio::sync::mpsc;
 use uuid::Uuid;
-
-const PTY_CHANNEL_CAPACITY: usize = 256;
 
 pub struct App {
     pub config: AppConfig,
     pub selected_project: Option<Uuid>,
     pub add_form: AddProjectForm,
     pub terminals: HashMap<Uuid, TerminalState>,
-    pub pty_tx: mpsc::Sender<(Uuid, Vec<u8>)>,
+    pub next_terminal_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -35,31 +31,18 @@ pub enum Message {
     ProjectFolderSelected(Option<PathBuf>),
     SubmitAddProjectForm,
     OpenTerminal(Uuid),
-    PtyOutput(Uuid, Vec<u8>),
-    TerminalViewportChanged(Uuid, TerminalViewport),
-    TerminalInput(Uuid, String),
-    InputChanged(Uuid, String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TerminalViewport {
-    pub width: f32,
-    pub height: f32,
+    Terminal(iced_term::Event),
 }
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
-        let config = AppConfig::load();
-        let (pty_tx, pty_rx) = mpsc::channel(PTY_CHANNEL_CAPACITY);
-        subscription::install_receiver(pty_rx);
-
         (
             Self {
-                config,
+                config: AppConfig::load(),
                 selected_project: None,
                 add_form: Default::default(),
                 terminals: HashMap::new(),
-                pty_tx,
+                next_terminal_id: 1,
             },
             Task::none(),
         )
@@ -75,10 +58,7 @@ impl App {
             }
             Message::RemoveProject(id) => {
                 self.config.projects.retain(|project| project.id != id);
-
-                if let Some(mut terminal) = self.terminals.remove(&id) {
-                    Self::shutdown_terminal(&mut terminal);
-                }
+                self.terminals.remove(&id);
 
                 if self.selected_project == Some(id) {
                     self.selected_project = None;
@@ -96,9 +76,7 @@ impl App {
             Message::FormNameChanged(value) => {
                 self.add_form.name = value;
             }
-            Message::FormDirChanged(_value) => {
-                // Keep for backward compatibility, but unused in new UI
-            }
+            Message::FormDirChanged(_value) => {}
             Message::ChooseProjectFolder => {
                 return Task::perform(
                     async {
@@ -133,80 +111,48 @@ impl App {
                     .iter()
                     .find(|project| project.id == project_id)
                 {
-                    match crate::terminal::pty::spawn_shell(
-                        &project.working_dir,
-                        self.pty_tx.clone(),
+                    let terminal = iced_term::Terminal::new(
+                        self.next_terminal_id,
+                        settings_for_working_dir(&project.working_dir),
+                    );
+                    self.next_terminal_id += 1;
+                    let widget_id = terminal.widget_id();
+
+                    self.terminals.insert(
                         project_id,
-                    ) {
-                        Ok(handle) => {
-                            let crate::terminal::pty::PtyHandle {
-                                writer,
-                                lifecycle,
-                                controller,
-                            } = handle;
+                        TerminalState {
+                            id: project_id,
+                            project_id,
+                            terminal,
+                            title: None,
+                        },
+                    );
 
-                            self.terminals.insert(
-                                project_id,
-                                TerminalState {
-                                    id: project_id,
-                                    project_id: project_id,
-                                    model: TerminalModel::new(120, 40),
-                                    input_buf: String::new(),
-                                    writer,
-                                    lifecycle: Some(lifecycle),
-                                    last_size: None,
-                                    resize: Box::new(move |size| {
-                                        controller.resize(portable_pty::PtySize {
-                                            rows: size.rows,
-                                            cols: size.cols,
-                                            pixel_width: 0,
-                                            pixel_height: 0,
-                                        })?;
-                                        Ok(())
-                                    }),
-                                },
-                            );
+                    return iced_term::TerminalView::focus(widget_id);
+                }
+            }
+            Message::Terminal(iced_term::Event::CommandReceived(term_id, cmd)) => {
+                let mut closed_project = None;
+
+                if let Some((project_id, terminal_state)) = self
+                    .terminals
+                    .iter_mut()
+                    .find(|(_, terminal)| terminal.terminal.id == term_id)
+                {
+                    match terminal_state.terminal.update(cmd) {
+                        iced_term::actions::Action::Shutdown => {
+                            closed_project = Some(*project_id);
                         }
-                        Err(error) => {
-                            eprintln!("Failed to spawn PTY: {error}");
+                        iced_term::actions::Action::ChangeTitle(title) => {
+                            terminal_state.title = Some(title);
+                        }
+                        iced_term::actions::Action::Redraw | iced_term::actions::Action::Ignore => {
                         }
                     }
                 }
-            }
-            Message::PtyOutput(id, bytes) => {
-                if let Some(terminal) = self.terminals.get_mut(&id) {
-                    terminal.model.process_output(&bytes);
-                }
-            }
-            Message::TerminalViewportChanged(id, viewport) => {
-                if let Some(terminal) = self.terminals.get_mut(&id) {
-                    let Some(size) = terminal_size_for_viewport(viewport) else {
-                        return Task::none();
-                    };
 
-                    if terminal.last_size == Some(size) {
-                        return Task::none();
-                    }
-
-                    let _ = terminal.model.resize(size);
-
-                    if let Err(error) = (terminal.resize)(size) {
-                        eprintln!("Failed to resize PTY for terminal {id}: {error}");
-                        return Task::none();
-                    }
-
-                    terminal.last_size = Some(size);
-                }
-            }
-            Message::TerminalInput(id, input) => {
-                if let Some(terminal) = self.terminals.get_mut(&id) {
-                    let _ = terminal.writer.write_all(input.as_bytes());
-                    terminal.input_buf.clear();
-                }
-            }
-            Message::InputChanged(id, value) => {
-                if let Some(terminal) = self.terminals.get_mut(&id) {
-                    terminal.input_buf = value;
+                if let Some(project_id) = closed_project {
+                    self.terminals.remove(&project_id);
                 }
             }
         }
@@ -226,13 +172,6 @@ impl App {
             .push(Project::new_local(name, working_dir));
         self.config.save();
         true
-    }
-
-    fn shutdown_terminal(terminal: &mut TerminalState) {
-        if let Some(lifecycle) = terminal.lifecycle.as_mut() {
-            lifecycle.shutdown();
-        }
-        terminal.lifecycle = None;
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -350,14 +289,19 @@ impl App {
                 .find(|project| project.id == selected_id)
             {
                 if let Some(terminal) = self.terminals.get(&selected_id) {
+                    let title = terminal
+                        .title
+                        .as_ref()
+                        .filter(|title| !title.trim().is_empty())
+                        .map(|title| format!("Terminal: {} [{}]", project.name, title))
+                        .unwrap_or_else(|| format!("Terminal: {}", project.name));
+
                     column![
-                        text(format!("Terminal: {}", project.name)).size(16),
-                        container(render::terminal_view(
-                            selected_id,
-                            &terminal.model,
-                            move |viewport| Message::TerminalViewportChanged(selected_id, viewport),
-                            move |ch| Message::TerminalInput(selected_id, ch),
-                        ))
+                        text(title).size(16),
+                        container(
+                            iced_term::TerminalView::show(&terminal.terminal)
+                                .map(Message::Terminal)
+                        )
                         .height(Length::Fill),
                     ]
                     .spacing(8)
@@ -394,126 +338,22 @@ impl App {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        subscription::pty_output_subscription().map(|(id, bytes)| Message::PtyOutput(id, bytes))
-    }
-}
-
-fn terminal_size_for_viewport(
-    viewport: TerminalViewport,
-) -> Option<crate::terminal::model::TerminalSize> {
-    if !viewport.width.is_finite() || !viewport.height.is_finite() {
-        return None;
-    }
-
-    let cols = (viewport.width / render::CELL_WIDTH).floor() as u16;
-    let rows = (viewport.height / render::CELL_HEIGHT).floor() as u16;
-
-    if cols == 0 || rows == 0 {
-        return None;
-    }
-
-    Some(crate::terminal::model::TerminalSize { cols, rows })
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        for terminal in self.terminals.values_mut() {
-            Self::shutdown_terminal(terminal);
-        }
+        iced::Subscription::batch(self.terminals.values().map(|terminal| {
+            iced::Subscription::run_with_id(
+                terminal.terminal.id,
+                iced_term::Subscription::new(terminal.terminal.id).event_stream(),
+            )
+            .map(Message::Terminal)
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Message, TerminalViewport};
+    use super::{App, Message};
     use crate::config::AppConfig;
-    use crate::terminal::{
-        model::TerminalModel, pty::PtyLifecycle, subscription::subscription_test_lock,
-        TerminalState,
-    };
-    use iced::advanced::subscription::into_recipes;
-    use iced::futures::StreamExt;
-    use portable_pty::{Child, ChildKiller, ExitStatus};
-    use std::collections::HashMap;
-    use std::fmt;
-    use std::io::{self, Write};
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex, OnceLock};
-    use std::time::Duration;
-    use tokio::sync::mpsc;
-    use uuid::Uuid;
-
-    #[derive(Clone)]
-    struct RecordingWriter {
-        bytes: Arc<Mutex<Vec<u8>>>,
-    }
-
-    #[derive(Clone, Default)]
-    struct ChildState {
-        killed: usize,
-        waited: usize,
-        exited: bool,
-    }
-
-    #[derive(Clone, Default)]
-    struct RecordingChild {
-        state: Arc<Mutex<ChildState>>,
-    }
-
-    impl fmt::Debug for RecordingChild {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("RecordingChild").finish()
-        }
-    }
-
-    impl Write for RecordingWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.bytes
-                .lock()
-                .expect("recording writer lock")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ChildKiller for RecordingChild {
-        fn kill(&mut self) -> io::Result<()> {
-            let mut state = self.state.lock().expect("recording child lock");
-            state.killed += 1;
-            state.exited = true;
-            Ok(())
-        }
-
-        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-            Box::new(self.clone())
-        }
-    }
-
-    impl Child for RecordingChild {
-        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            let state = self.state.lock().expect("recording child lock");
-            if state.exited {
-                Ok(Some(ExitStatus::with_exit_code(0)))
-            } else {
-                Ok(None)
-            }
-        }
-
-        fn wait(&mut self) -> io::Result<ExitStatus> {
-            let mut state = self.state.lock().expect("recording child lock");
-            state.waited += 1;
-            state.exited = true;
-            Ok(ExitStatus::with_exit_code(0))
-        }
-
-        fn process_id(&self) -> Option<u32> {
-            None
-        }
-    }
+    use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -521,72 +361,13 @@ mod tests {
     }
 
     fn test_app() -> App {
-        let (pty_tx, _pty_rx) = mpsc::channel(super::PTY_CHANNEL_CAPACITY);
         App {
             config: AppConfig::default(),
             selected_project: None,
             add_form: Default::default(),
-            terminals: HashMap::new(),
-            pty_tx,
+            terminals: std::collections::HashMap::new(),
+            next_terminal_id: 1,
         }
-    }
-
-    fn insert_test_terminal(
-        app: &mut App,
-        project_id: Uuid,
-        lifecycle: Option<PtyLifecycle>,
-    ) -> Arc<Mutex<Vec<u8>>> {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = RecordingWriter {
-            bytes: bytes.clone(),
-        };
-
-        app.terminals.insert(
-            project_id,
-            TerminalState {
-                id: project_id,
-                project_id: project_id,
-                model: TerminalModel::new(120, 40),
-                input_buf: String::new(),
-                writer: Box::new(writer),
-                lifecycle,
-                last_size: None,
-                resize: Box::new(|_| Ok(())),
-            },
-        );
-
-        bytes
-    }
-
-    fn insert_test_terminal_with_resize(
-        app: &mut App,
-        project_id: Uuid,
-    ) -> Arc<Mutex<Vec<crate::terminal::model::TerminalSize>>> {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let resize_calls = calls.clone();
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = RecordingWriter {
-            bytes: bytes.clone(),
-        };
-
-        app.terminals.insert(
-            project_id,
-            TerminalState {
-                id: project_id,
-                project_id: project_id,
-                model: TerminalModel::new(120, 40),
-                input_buf: String::new(),
-                writer: Box::new(writer),
-                lifecycle: None,
-                last_size: None,
-                resize: Box::new(move |size| {
-                    resize_calls.lock().expect("resize calls lock").push(size);
-                    Ok(())
-                }),
-            },
-        );
-
-        calls
     }
 
     fn with_temp_config_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
@@ -689,216 +470,29 @@ mod tests {
     }
 
     #[test]
-    fn input_changed_updates_terminal_input_buffer() {
+    fn open_terminal_without_matching_project_is_noop() {
         let mut app = test_app();
-        let project_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, project_id, None);
-
-        let _ = app.update(Message::InputChanged(project_id, "echo hi".into()));
-
-        assert_eq!(
-            app.terminals
-                .get(&project_id)
-                .expect("terminal exists")
-                .input_buf,
-            "echo hi"
-        );
-    }
-
-    #[test]
-    fn terminal_input_writes_input_and_clears_buffer() {
-        let mut app = test_app();
-        let project_id = Uuid::new_v4();
-        let bytes = insert_test_terminal(&mut app, project_id, None);
-        app.terminals
-            .get_mut(&project_id)
-            .expect("terminal exists")
-            .input_buf = "pending".into();
-
-        let _ = app.update(Message::TerminalInput(project_id, "pwd".into()));
-
-        let written = bytes.lock().expect("recording writer lock").clone();
-        assert_eq!(written, b"pwd");
-        assert!(app
-            .terminals
-            .get(&project_id)
-            .expect("terminal exists")
-            .input_buf
-            .is_empty());
-    }
-
-    #[test]
-    fn open_terminal_without_matching_agent_is_noop() {
-        let mut app = test_app();
-        let _ = app.update(Message::OpenTerminal(Uuid::new_v4()));
+        let _ = app.update(Message::OpenTerminal(uuid::Uuid::new_v4()));
         assert!(app.terminals.is_empty());
     }
 
     #[test]
-    fn pty_output_advances_terminal_model_screen() {
-        let mut app = test_app();
-        let project_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, project_id, None);
-
-        let _ = app.update(Message::PtyOutput(project_id, b"hi".to_vec()));
-
-        // Verify the terminal processed the output by checking it's marked dirty
-        assert!(app
-            .terminals
-            .get(&project_id)
-            .expect("terminal exists")
-            .model
-            .is_dirty());
-    }
-
-    #[test]
-    fn ansi_output_updates_surface_instead_of_literal_escape_text() {
-        let mut app = test_app();
-        let project_id = Uuid::new_v4();
-        let _ = insert_test_terminal(&mut app, project_id, None);
-
-        let _ = app.update(Message::PtyOutput(project_id, b"\x1b[31mR".to_vec()));
-
-        // Verify the terminal processed the ANSI escape sequence
-        let terminal = app.terminals.get(&project_id).expect("terminal exists");
-        // After processing output, the model should be marked dirty
-        assert!(terminal.model.is_dirty());
-    }
-
-    #[test]
-    fn removing_selected_project_shuts_down_terminal_lifecycle() {
+    fn open_terminal_creates_iced_term_state() {
         with_temp_config_dir(|workspace_dir: &PathBuf| {
             let mut app = test_app();
 
             let _ = app.update(Message::AddProject {
-                name: "Local agent".into(),
+                name: "Local project".into(),
                 working_dir: workspace_dir.display().to_string(),
             });
 
             let project_id = app.config.projects[0].id;
-            let child = RecordingChild::default();
-            let child_state = child.state.clone();
-            let lifecycle = PtyLifecycle::new(Box::new(child));
-            let _ = insert_test_terminal(&mut app, project_id, Some(lifecycle));
+            let _ = app.update(Message::OpenTerminal(project_id));
 
-            let _ = app.update(Message::RemoveProject(project_id));
-
-            let state = child_state.lock().expect("recording child lock");
-            assert_eq!(state.killed, 1);
-            assert_eq!(state.waited, 1);
+            let terminal = app.terminals.get(&project_id).expect("terminal exists");
+            assert_eq!(terminal.project_id, project_id);
+            assert_eq!(terminal.terminal.id, 1);
         });
-    }
-
-    #[test]
-    fn dropping_app_shuts_down_terminal_lifecycle() {
-        let child = RecordingChild::default();
-        let child_state = child.state.clone();
-
-        let mut app = test_app();
-        let project_id = Uuid::new_v4();
-        let lifecycle = PtyLifecycle::new(Box::new(child));
-        let _ = insert_test_terminal(&mut app, project_id, Some(lifecycle));
-
-        drop(app);
-
-        let state = child_state.lock().expect("recording child lock");
-        assert_eq!(state.killed, 1);
-        assert_eq!(state.waited, 1);
-    }
-
-    #[test]
-    fn app_new_installs_receiver_for_subscription_stream() {
-        let _guard = subscription_test_lock().lock().expect("subscription lock");
-        let (app, _) = App::new();
-        let terminal_id = Uuid::new_v4();
-
-        app.pty_tx
-            .blocking_send((terminal_id, b"echo from app".to_vec()))
-            .expect("send pty payload");
-
-        let mut recipes = into_recipes(app.subscription());
-        assert_eq!(recipes.len(), 1, "expected one active PTY subscription");
-
-        let mut stream = recipes
-            .remove(0)
-            .stream(iced::futures::stream::empty().boxed());
-
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let message = runtime
-            .block_on(async {
-                tokio::time::timeout(Duration::from_millis(250), stream.next())
-                    .await
-                    .expect("subscription stream item within timeout")
-            })
-            .expect("subscription stream output");
-
-        match message {
-            Message::PtyOutput(id, bytes) => {
-                assert_eq!(id, terminal_id);
-                assert_eq!(bytes, b"echo from app".to_vec());
-            }
-            other => panic!("unexpected message from subscription: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn terminal_resize_requests_pty_resize_once_per_new_grid_size() {
-        let mut app = test_app();
-        let project_id = Uuid::new_v4();
-        let tracker = insert_test_terminal_with_resize(&mut app, project_id);
-
-        let _ = app.update(Message::TerminalViewportChanged(
-            project_id,
-            TerminalViewport {
-                width: 800.0,
-                height: 384.0,
-            },
-        ));
-        let _ = app.update(Message::TerminalViewportChanged(
-            project_id,
-            TerminalViewport {
-                width: 800.0,
-                height: 384.0,
-            },
-        ));
-
-        assert_eq!(
-            tracker.lock().expect("tracker lock").as_slice(),
-            &[crate::terminal::model::TerminalSize {
-                cols: 100,
-                rows: 24,
-            }]
-        );
-    }
-
-    #[test]
-    fn submit_add_project_form_adds_project_and_resets_form() {
-        with_temp_config_dir(|workspace_dir| {
-            let mut app = test_app();
-
-            let _ = app.update(Message::ShowAddProjectForm);
-            let _ = app.update(Message::FormNameChanged("Local project".into()));
-            let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
-            let _ = app.update(Message::SubmitAddProjectForm);
-
-            assert_eq!(app.config.projects.len(), 1);
-            assert_eq!(app.config.projects[0].name, "Local project");
-            assert_eq!(app.config.projects[0].working_dir, *workspace_dir);
-            assert!(!app.add_form.visible);
-            assert_eq!(app.add_form.selected_dir, None);
-        });
-    }
-
-    #[test]
-    fn submit_add_project_form_requires_selected_directory() {
-        let mut app = test_app();
-
-        let _ = app.update(Message::ShowAddProjectForm);
-        let _ = app.update(Message::FormNameChanged("Local project".into()));
-        let _ = app.update(Message::SubmitAddProjectForm);
-
-        assert!(app.config.projects.is_empty());
-        assert!(app.add_form.visible);
     }
 
     #[test]

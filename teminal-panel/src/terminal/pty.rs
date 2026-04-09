@@ -7,6 +7,8 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub const DEFAULT_TERMINAL_COLS: u16 = 80;
+pub const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
 pub struct PtyHandle {
     pub writer: Box<dyn std::io::Write + Send>,
@@ -44,7 +46,14 @@ impl PtyLifecycle {
             Ok(Some(_)) => {}
             Ok(None) | Err(_) => {
                 let _ = child.kill();
-                let _ = child.wait();
+
+                for _ in 0..50 {
+                    match child.try_wait() {
+                        Ok(Some(_)) => return,
+                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                        Err(_) => return,
+                    }
+                }
             }
         }
     }
@@ -63,8 +72,8 @@ pub fn spawn_shell(
 ) -> PtyResult<PtyHandle> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
-        rows: 24,
-        cols: 80,
+        rows: DEFAULT_TERMINAL_ROWS,
+        cols: DEFAULT_TERMINAL_COLS,
         pixel_width: 0,
         pixel_height: 0,
     })?;
@@ -103,7 +112,7 @@ pub fn spawn_shell(
 
 fn shell_command(working_dir: &Path) -> CommandBuilder {
     #[cfg(windows)]
-    let mut command = CommandBuilder::new(windows_shell_program_from_env(std::env::var_os));
+    let mut command = windows_shell_command();
 
     #[cfg(not(windows))]
     let mut command = CommandBuilder::new_default_prog();
@@ -112,7 +121,25 @@ fn shell_command(working_dir: &Path) -> CommandBuilder {
     command
 }
 
-fn windows_shell_program_from_env(get_env: impl Fn(&str) -> Option<OsString>) -> OsString {
+#[cfg(windows)]
+fn windows_shell_command() -> CommandBuilder {
+    let shell = windows_shell_program_from_env(|key| std::env::var_os(key));
+    let mut command = CommandBuilder::new(&shell);
+
+    if is_cmd_exe(&shell) {
+        command.args(["/Q", "/D", "/K", "chcp 65001>nul"]);
+        command.env("LANG", "C.UTF-8");
+        command.env("LC_ALL", "C.UTF-8");
+        command.env("PYTHONUTF8", "1");
+        command.env("PYTHONIOENCODING", "utf-8");
+    }
+
+    command
+}
+
+fn windows_shell_program_from_env(
+    get_env: impl for<'a> Fn(&'a str) -> Option<OsString>,
+) -> OsString {
     get_env("COMSPEC")
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -122,17 +149,30 @@ fn windows_shell_program_from_env(get_env: impl Fn(&str) -> Option<OsString>) ->
         .unwrap_or_else(|| OsString::from(r"C:\Windows\System32\cmd.exe"))
 }
 
-fn windows_directory_from_env(get_env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+fn windows_directory_from_env(
+    get_env: &impl for<'a> Fn(&'a str) -> Option<OsString>,
+) -> Option<PathBuf> {
     get_env("SystemRoot")
         .or_else(|| get_env("WINDIR"))
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
 
+#[cfg(windows)]
+fn is_cmd_exe(program: &OsString) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("cmd.exe"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::spawn_shell;
+    use crate::terminal::model::TerminalModel;
     use std::ffi::OsString;
+    use std::io::Write;
     use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc;
     use uuid::Uuid;
@@ -208,5 +248,171 @@ mod tests {
         });
 
         assert_eq!(shell, OsString::from(r"C:\Windows\System32\cmd.exe"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn spawn_shell_emits_output_after_command() {
+        let working_dir = std::env::current_dir().expect("current dir");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        runtime.block_on(async {
+            let terminal_id = Uuid::new_v4();
+            let (tx, mut rx) = mpsc::channel(16);
+            let mut handle = spawn_shell(&working_dir, tx, terminal_id).expect("spawn shell");
+
+            handle
+                .writer
+                .write_all(b"echo codex-pty-test\r\n")
+                .expect("write command");
+
+            let mut output = Vec::new();
+            let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+
+            while tokio::time::Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Some((id, bytes)) = tokio::time::timeout(remaining, rx.recv())
+                    .await
+                    .expect("pty output before timeout")
+                else {
+                    break;
+                };
+
+                assert_eq!(id, terminal_id);
+                output.extend_from_slice(&bytes);
+
+                if String::from_utf8_lossy(&output).contains("codex-pty-test") {
+                    break;
+                }
+            }
+
+            handle.lifecycle.shutdown();
+
+            assert!(
+                String::from_utf8_lossy(&output).contains("codex-pty-test"),
+                "pty output did not contain echoed marker: {}",
+                String::from_utf8_lossy(&output)
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn spawn_shell_emits_utf8_chinese_output() {
+        let working_dir = std::env::current_dir().expect("current dir");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        runtime.block_on(async {
+            let terminal_id = Uuid::new_v4();
+            let (tx, mut rx) = mpsc::channel(16);
+            let mut handle = spawn_shell(&working_dir, tx, terminal_id).expect("spawn shell");
+
+            handle
+                .writer
+                .write_all("echo 中文\r".as_bytes())
+                .expect("write command");
+
+            let mut model = TerminalModel::new(80, 24);
+            let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+
+            while tokio::time::Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Some((id, bytes)) = tokio::time::timeout(remaining, rx.recv())
+                    .await
+                    .expect("pty output before timeout")
+                else {
+                    break;
+                };
+
+                assert_eq!(id, terminal_id);
+                model.process_output(&bytes);
+
+                if model.visible_text_rows().join("\n").contains("中文") {
+                    break;
+                }
+            }
+
+            handle.lifecycle.shutdown();
+
+            assert!(
+                model.visible_text_rows().join("\n").contains("中文"),
+                "shell output did not contain expected UTF-8 Chinese text: {:?}",
+                model.visible_text_rows()
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn spawn_shell_emits_initial_prompt() {
+        let working_dir = std::env::current_dir().expect("current dir");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        runtime.block_on(async {
+            let terminal_id = Uuid::new_v4();
+            let (tx, mut rx) = mpsc::channel(16);
+            let mut handle = spawn_shell(&working_dir, tx, terminal_id).expect("spawn shell");
+
+            let received = tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
+                .await
+                .ok()
+                .flatten();
+
+            handle.lifecycle.shutdown();
+
+            assert!(
+                received.is_some(),
+                "shell did not emit any initial output within timeout"
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn initial_shell_output_produces_visible_terminal_text() {
+        let working_dir = std::env::current_dir().expect("current dir");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        runtime.block_on(async {
+            let terminal_id = Uuid::new_v4();
+            let (tx, mut rx) = mpsc::channel(16);
+            let mut handle = spawn_shell(&working_dir, tx, terminal_id).expect("spawn shell");
+
+            let mut model = TerminalModel::new(80, 24);
+            let mut raw = Vec::new();
+            let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(3);
+
+            while tokio::time::Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Some((id, bytes)) = tokio::time::timeout(remaining, rx.recv())
+                    .await
+                    .expect("pty output before timeout")
+                else {
+                    break;
+                };
+
+                assert_eq!(id, terminal_id);
+                raw.extend_from_slice(&bytes);
+                model.process_output(&bytes);
+
+                if model
+                    .visible_text_rows()
+                    .iter()
+                    .any(|row| !row.trim().is_empty())
+                {
+                    break;
+                }
+            }
+
+            handle.lifecycle.shutdown();
+
+            let joined = model.visible_text_rows().join("\n");
+
+            assert!(
+                joined.trim().len() > 0,
+                "initial shell output produced no visible text; raw bytes={:?}",
+                raw
+            );
+        });
     }
 }
