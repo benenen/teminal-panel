@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::project::{panel::AddProjectForm, Project};
 use crate::terminal::{settings_for_working_dir, DisplayMode, ProjectTerminals, TerminalState};
-use iced::widget::{button, column, container, row, scrollable, stack, text};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, stack, text, text_input};
 use iced::{Element, Length, Padding, Task, Theme};
 use iced_fonts::bootstrap;
 use std::collections::{HashMap, HashSet};
@@ -13,7 +13,9 @@ use uuid::Uuid;
 pub struct App {
     pub config: AppConfig,
     pub selected_project: Option<Uuid>,
+    pub hovered_project: Option<Uuid>,
     pub expanded_projects: HashSet<Uuid>,
+    pub editing_terminal: Option<(Uuid, usize)>,
     pub add_form: AddProjectForm,
     pub terminals: HashMap<Uuid, ProjectTerminals>,
     pub next_terminal_id: u64,
@@ -24,6 +26,7 @@ pub enum Message {
     SelectProject(Uuid),
     AddProject { name: String, working_dir: String },
     RemoveProject(Uuid),
+    HoverProject(Option<Uuid>),
     ShowAddProjectForm,
     HideAddProjectForm,
     FormNameChanged(String),
@@ -34,7 +37,9 @@ pub enum Message {
     ToggleProjectExpanded(Uuid),
     SelectTab(Uuid, usize),
     CloseTab(Uuid, usize),
+    StartRenameTerminal(Uuid, usize),
     RenameTerminal(Uuid, usize, String),
+    FinishRenameTerminal,
     ToggleDisplayMode(Uuid),
     Terminal(iced_term::Event),
 }
@@ -45,7 +50,9 @@ impl App {
             Self {
                 config: AppConfig::load(),
                 selected_project: None,
+                hovered_project: None,
                 expanded_projects: HashSet::new(),
+                editing_terminal: None,
                 add_form: Default::default(),
                 terminals: HashMap::new(),
                 next_terminal_id: 1,
@@ -70,8 +77,14 @@ impl App {
                 if self.selected_project == Some(id) {
                     self.selected_project = None;
                 }
+                if self.hovered_project == Some(id) {
+                    self.hovered_project = None;
+                }
 
                 self.config.save();
+            }
+            Message::HoverProject(id) => {
+                self.hovered_project = id;
             }
             Message::ShowAddProjectForm => {
                 self.add_form.visible = true;
@@ -112,18 +125,19 @@ impl App {
                         settings_for_working_dir(&project.working_dir),
                     ) {
                         Ok(terminal) => {
-                            let term_num = self.next_terminal_id;
                             self.next_terminal_id += 1;
                             let widget_id = terminal.widget_id().clone();
 
+                            let project_name = project.name.clone();
                             let project_terms = self
                                 .terminals
                                 .entry(project_id)
                                 .or_insert_with(ProjectTerminals::new);
+                            let term_num = project_terms.terminals.len() + 1;
 
                             project_terms.terminals.push(TerminalState {
                                 terminal,
-                                name: format!("Terminal {term_num}"),
+                                name: format!("{} * {}", project_name, term_num),
                                 title: None,
                             });
                             project_terms.active_index = project_terms.terminals.len() - 1;
@@ -144,6 +158,8 @@ impl App {
                 }
             }
             Message::SelectTab(project_id, index) => {
+                self.selected_project = Some(project_id);
+                self.expanded_projects.insert(project_id);
                 if let Some(project_terms) = self.terminals.get_mut(&project_id) {
                     if index < project_terms.terminals.len() {
                         project_terms.active_index = index;
@@ -159,6 +175,12 @@ impl App {
                         self.terminals.remove(&project_id);
                     }
                 }
+                if self.editing_terminal == Some((project_id, index)) {
+                    self.editing_terminal = None;
+                }
+            }
+            Message::StartRenameTerminal(project_id, index) => {
+                self.editing_terminal = Some((project_id, index));
             }
             Message::RenameTerminal(project_id, index, new_name) => {
                 if let Some(project_terms) = self.terminals.get_mut(&project_id) {
@@ -166,6 +188,9 @@ impl App {
                         ts.name = new_name;
                     }
                 }
+            }
+            Message::FinishRenameTerminal => {
+                self.editing_terminal = None;
             }
             Message::ToggleDisplayMode(project_id) => {
                 if let Some(project_terms) = self.terminals.get_mut(&project_id) {
@@ -185,6 +210,10 @@ impl App {
                         .enumerate()
                         .find(|(_, ts)| ts.terminal.id == term_id)
                     {
+                        self.selected_project = Some(*project_id);
+                        self.expanded_projects.insert(*project_id);
+                        project_terms.active_index = idx;
+
                         match ts.terminal.handle(iced_term::Command::ProxyToBackend(cmd)) {
                             iced_term::actions::Action::Shutdown => {
                                 closed = Some((*project_id, idx));
@@ -301,35 +330,70 @@ impl App {
                 bootstrap::chevron_right().size(10)
             };
 
-            let item_style = if is_selected {
-                button::primary
+            let show_close = is_selected || self.hovered_project == Some(project.id);
+            let row_bg = if is_selected {
+                Some(iced::Color::from_rgb(0.18, 0.24, 0.36))
             } else {
-                button::secondary
+                None
+            };
+            let row_border = if is_selected {
+                iced::Color::from_rgb(0.3, 0.5, 0.9)
+            } else {
+                iced::Color::TRANSPARENT
+            };
+            let label_color = if is_selected {
+                iced::Color::WHITE
+            } else {
+                iced::Color::from_rgb(0.85, 0.85, 0.85)
             };
 
-            let name_btn = button(
-                row![bootstrap::folder().size(14), text(&project.name).size(13),]
+            let project_button = button(
+                row![bootstrap::folder().size(14), text(&project.name).size(13).color(label_color),]
                     .spacing(6)
                     .align_y(iced::alignment::Vertical::Center),
             )
             .width(Length::Fill)
-            .style(item_style)
+            .style(button::text)
             .padding([6, 8])
             .on_press(Message::SelectProject(project.id));
 
-            let name_row = row![
-                button(chevron)
-                    .on_press(Message::ToggleProjectExpanded(project.id))
-                    .padding([4, 4])
-                    .style(button::text),
-                name_btn,
+            let chevron_btn = button(chevron)
+                .on_press(Message::ToggleProjectExpanded(project.id))
+                .padding([4, 4])
+                .style(button::text);
+
+            let close_btn: Element<'_, Message> = if show_close {
                 button(bootstrap::x_lg().size(10))
                     .on_press(Message::RemoveProject(project.id))
                     .padding([4, 4])
-                    .style(button::text),
-            ]
-            .spacing(2)
-            .align_y(iced::alignment::Vertical::Center);
+                    .style(button::text)
+                    .into()
+            } else {
+                container(text(" ").size(10)).padding([4, 4]).into()
+            };
+
+            let row_content = row![chevron_btn, project_button, close_btn,]
+                .spacing(2)
+                .align_y(iced::alignment::Vertical::Center);
+
+            let row_container = container(row_content)
+                .width(Length::Fill)
+                .style(move |_| {
+                    let mut style = container::Style::default().border(iced::Border {
+                        color: row_border,
+                        width: if row_bg.is_some() { 1.0 } else { 0.0 },
+                        radius: 6.into(),
+                    });
+                    if let Some(bg) = row_bg {
+                        style = style.background(bg);
+                    }
+                    style
+                })
+                .padding([0, 2]);
+
+            let name_row = mouse_area(row_container)
+                .on_enter(Message::HoverProject(Some(project.id)))
+                .on_exit(Message::HoverProject(None));
 
             let mut project_col = column![name_row].spacing(0);
 
@@ -351,11 +415,31 @@ impl App {
                 if let Some(project_terms) = self.terminals.get(&project.id) {
                     for (i, ts) in project_terms.terminals.iter().enumerate() {
                         let is_active_tab = is_selected && i == project_terms.active_index;
-                        let label = &ts.name;
+                        let is_editing = self.editing_terminal == Some((project.id, i));
+
+                        let name_field: Element<'_, Message> = if is_editing {
+                            text_input("Terminal name", &ts.name)
+                                .on_input(move |value| Message::RenameTerminal(project.id, i, value))
+                                .on_submit(Message::FinishRenameTerminal)
+                                .padding([2, 6])
+                                .size(11)
+                                .into()
+                        } else {
+                            button(text(&ts.name).size(11).width(Length::Fill))
+                                .on_press(Message::SelectTab(project.id, i))
+                                .style(button::text)
+                                .padding(0)
+                                .width(Length::Fill)
+                                .into()
+                        };
 
                         let term_row = row![
                             bootstrap::terminal().size(11),
-                            text(label).size(11).width(Length::Fill),
+                            name_field,
+                            button(bootstrap::pencil().size(9))
+                                .on_press(Message::StartRenameTerminal(project.id, i))
+                                .padding([1, 3])
+                                .style(button::text),
                             button(bootstrap::x_lg().size(9))
                                 .on_press(Message::CloseTab(project.id, i))
                                 .padding([1, 3])
@@ -364,14 +448,8 @@ impl App {
                         .spacing(6)
                         .align_y(iced::alignment::Vertical::Center);
 
-                        let term_style = if is_active_tab {
-                            button::primary
-                        } else {
-                            button::text
-                        };
-
                         project_col = project_col.push(
-                            button(term_row)
+                            container(term_row)
                                 .width(Length::Fill)
                                 .padding(Padding {
                                     top: 4.0,
@@ -379,8 +457,14 @@ impl App {
                                     bottom: 4.0,
                                     left: 28.0,
                                 })
-                                .style(term_style)
-                                .on_press(Message::SelectTab(project.id, i)),
+                                .style(move |_| {
+                                    if is_active_tab {
+                                        container::Style::default()
+                                            .background(iced::Color::from_rgb(0.18, 0.24, 0.36))
+                                    } else {
+                                        container::Style::default()
+                                    }
+                                }),
                         );
                     }
                 }
@@ -538,23 +622,44 @@ impl App {
                         } else {
                             iced::Color::from_rgb(0.18, 0.18, 0.18)
                         };
+                        let dim_overlay = if is_active {
+                            iced::Color::from_rgba(0.0, 0.0, 0.0, 0.0)
+                        } else {
+                            iced::Color::from_rgba(0.0, 0.0, 0.0, 0.38)
+                        };
+
+                        let term_view = iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal);
+                        let panel = stack![
+                            container(term_view)
+                                .width(Length::Fill)
+                                .height(Length::Fill),
+                            container(text(""))
+                                .width(Length::Fill)
+                                .height(Length::Fill)
+                                .style(move |_| container::Style::default().background(dim_overlay)),
+                        ];
+
                         r.push(
-                            container(
-                                iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal),
+                            mouse_area(
+                                container(panel)
+                                    .width(Length::Fill)
+                                    .height(Length::Fill)
+                                    .style(move |_| {
+                                        container::Style::default()
+                                            .background(iced::Color::from_rgb(0.08, 0.08, 0.08))
+                                            .border(iced::Border {
+                                                color: border_color,
+                                                width: if is_active { 2.0 } else { 1.0 },
+                                                radius: 0.into(),
+                                            })
+                                    })
+                                    .padding(0),
                             )
-                            .width(Length::Fill)
-                            .height(Length::Fill)
-                            .style(move |_| {
-                                container::Style::default().border(iced::Border {
-                                    color: border_color,
-                                    width: if is_active { 2.0 } else { 1.0 },
-                                    radius: 0.into(),
-                                })
-                            }),
+                            .on_press(Message::SelectTab(project_id, i))
                         )
                     })
-                    .spacing(1);
-                panels.into()
+                    .spacing(6);
+                row!(panels).into()
             }
         };
 
@@ -577,11 +682,13 @@ impl App {
 
         for (i, ts) in project_terms.terminals.iter().enumerate() {
             let is_active = i == project_terms.active_index;
-            let label = &ts.name;
 
             let tab_label = row![
                 bootstrap::terminal().size(12),
-                text(label).size(12),
+                button(text(&ts.name).size(12))
+                    .on_press(Message::SelectTab(project_id, i))
+                    .style(button::text)
+                    .padding(0),
                 button(bootstrap::x_lg().size(10))
                     .on_press(Message::CloseTab(project_id, i))
                     .padding([2, 4])
@@ -590,17 +697,18 @@ impl App {
             .spacing(6)
             .align_y(iced::alignment::Vertical::Center);
 
-            let tab_style = if is_active {
-                button::primary
-            } else {
-                button::secondary
-            };
-
             tabs = tabs.push(
-                button(tab_label)
-                    .on_press(Message::SelectTab(project_id, i))
+                container(tab_label)
                     .padding([6, 12])
-                    .style(tab_style),
+                    .style(move |_| {
+                        if is_active {
+                            container::Style::default()
+                                .background(iced::Color::from_rgb(0.18, 0.24, 0.36))
+                        } else {
+                            container::Style::default()
+                                .background(iced::Color::from_rgb(0.16, 0.16, 0.16))
+                        }
+                    }),
             );
         }
 

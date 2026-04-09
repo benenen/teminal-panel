@@ -12,7 +12,9 @@ fn test_app() -> App {
     App {
         config: AppConfig::default(),
         selected_project: None,
+        hovered_project: None,
         expanded_projects: std::collections::HashSet::new(),
+        editing_terminal: None,
         add_form: Default::default(),
         terminals: std::collections::HashMap::new(),
         next_terminal_id: 1,
@@ -162,6 +164,8 @@ fn open_multiple_terminals_for_same_project() {
         let project_terms = app.terminals.get(&project_id).expect("terminals exist");
         assert_eq!(project_terms.terminals.len(), 2);
         assert_eq!(project_terms.active_index, 1);
+        assert_eq!(project_terms.terminals[0].name, "Local project * 1");
+        assert_eq!(project_terms.terminals[1].name, "Local project * 2");
     });
 }
 
@@ -220,6 +224,25 @@ fn close_last_tab_removes_project_terminals() {
         let _ = app.update(Message::CloseTab(project_id, 0));
 
         assert!(!app.terminals.contains_key(&project_id));
+    });
+}
+
+#[test]
+fn rename_terminal_updates_name() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::AddProject {
+            name: "Local project".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::OpenTerminal(project_id));
+        let _ = app.update(Message::RenameTerminal(project_id, 0, "api-shell".into()));
+
+        let project_terms = app.terminals.get(&project_id).expect("terminals exist");
+        assert_eq!(project_terms.terminals[0].name, "api-shell");
     });
 }
 
