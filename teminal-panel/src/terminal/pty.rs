@@ -68,9 +68,7 @@ pub fn spawn_shell(
         pixel_height: 0,
     })?;
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let mut command = CommandBuilder::new(&shell);
-    command.cwd(working_dir);
+    let command = shell_command(working_dir);
 
     let child = pair.slave.spawn_command(command)?;
     let controller = pair.master;
@@ -100,4 +98,59 @@ pub fn spawn_shell(
         lifecycle: PtyLifecycle::new(child),
         controller,
     })
+}
+
+fn shell_command(working_dir: &Path) -> CommandBuilder {
+    let mut command = CommandBuilder::new_default_prog();
+    command.cwd(working_dir);
+    command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_shell;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+    use tokio::sync::mpsc;
+    use uuid::Uuid;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_shell_ignores_invalid_shell_env_and_uses_platform_default() {
+        let _guard = env_lock().lock().expect("test env lock");
+        let working_dir = std::env::current_dir().expect("current dir");
+        let _shell = EnvVarGuard::set("SHELL", "/definitely/missing-shell");
+
+        let (tx, _rx) = mpsc::channel(1);
+        let mut handle = spawn_shell(&working_dir, tx, Uuid::new_v4()).expect("spawn shell");
+
+        handle.lifecycle.shutdown();
+    }
 }
