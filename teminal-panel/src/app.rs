@@ -1,10 +1,10 @@
 use crate::config::AppConfig;
 use crate::project::{panel::AddProjectForm, Project};
 use crate::terminal::{settings_for_working_dir, DisplayMode, ProjectTerminals, TerminalState};
-use iced::widget::{button, column, container, row, scrollable, text};
-use iced::{Element, Length, Task, Theme};
+use iced::widget::{button, column, container, row, scrollable, stack, text};
+use iced::{Element, Length, Padding, Task, Theme};
 use iced_fonts::bootstrap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use teminal_ui::components::{Button, TextInput};
 use teminal_ui::containers::Modal;
@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub struct App {
     pub config: AppConfig,
     pub selected_project: Option<Uuid>,
+    pub expanded_projects: HashSet<Uuid>,
     pub add_form: AddProjectForm,
     pub terminals: HashMap<Uuid, ProjectTerminals>,
     pub next_terminal_id: u64,
@@ -30,8 +31,10 @@ pub enum Message {
     ProjectFolderSelected(Option<PathBuf>),
     SubmitAddProjectForm,
     OpenTerminal(Uuid),
+    ToggleProjectExpanded(Uuid),
     SelectTab(Uuid, usize),
     CloseTab(Uuid, usize),
+    RenameTerminal(Uuid, usize, String),
     ToggleDisplayMode(Uuid),
     Terminal(iced_term::Event),
 }
@@ -42,6 +45,7 @@ impl App {
             Self {
                 config: AppConfig::load(),
                 selected_project: None,
+                expanded_projects: HashSet::new(),
                 add_form: Default::default(),
                 terminals: HashMap::new(),
                 next_terminal_id: 1,
@@ -54,6 +58,7 @@ impl App {
         match message {
             Message::SelectProject(id) => {
                 self.selected_project = Some(id);
+                self.expanded_projects.insert(id);
             }
             Message::AddProject { name, working_dir } => {
                 self.add_local_project(name, PathBuf::from(working_dir));
@@ -112,6 +117,7 @@ impl App {
                         settings_for_working_dir(&project.working_dir),
                     ) {
                         Ok(terminal) => {
+                            let term_num = self.next_terminal_id;
                             self.next_terminal_id += 1;
                             let widget_id = terminal.widget_id().clone();
 
@@ -122,10 +128,13 @@ impl App {
 
                             project_terms.terminals.push(TerminalState {
                                 terminal,
+                                name: format!("Terminal {term_num}"),
                                 title: None,
                             });
                             project_terms.active_index =
                                 project_terms.terminals.len() - 1;
+
+                            self.expanded_projects.insert(project_id);
 
                             return iced_term::TerminalView::focus(widget_id);
                         }
@@ -133,6 +142,11 @@ impl App {
                             eprintln!("Failed to create terminal: {e}");
                         }
                     }
+                }
+            }
+            Message::ToggleProjectExpanded(id) => {
+                if !self.expanded_projects.remove(&id) {
+                    self.expanded_projects.insert(id);
                 }
             }
             Message::SelectTab(project_id, index) => {
@@ -152,6 +166,13 @@ impl App {
                     project_terms.remove_terminal(index);
                     if project_terms.terminals.is_empty() {
                         self.terminals.remove(&project_id);
+                    }
+                }
+            }
+            Message::RenameTerminal(project_id, index, new_name) => {
+                if let Some(project_terms) = self.terminals.get_mut(&project_id) {
+                    if let Some(ts) = project_terms.terminals.get_mut(index) {
+                        ts.name = new_name;
                     }
                 }
             }
@@ -272,12 +293,12 @@ impl App {
                 .center_x(Length::Fill)
                 .center_y(Length::Fill);
 
-            column![
-                container(main_content)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
+            stack![
+                main_content,
                 overlay,
             ]
+            .width(Length::Fill)
+            .height(Length::Fill)
             .into()
         } else {
             main_content.into()
@@ -291,36 +312,13 @@ impl App {
             .iter()
             .fold(column![], |col, project| {
                 let is_selected = self.selected_project == Some(project.id);
+                let is_expanded = self.expanded_projects.contains(&project.id);
 
-                let term_count = self
-                    .terminals
-                    .get(&project.id)
-                    .map(|pt| pt.terminals.len())
-                    .unwrap_or(0);
-
-                let name_row = row![
-                    bootstrap::folder().size(14),
-                    text(&project.name).size(13),
-                ]
-                .spacing(8)
-                .align_y(iced::alignment::Vertical::Center);
-
-                let path_text = text(project.working_dir.display().to_string())
-                    .size(11)
-                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5));
-
-                let mut details = column![name_row, path_text].spacing(2).width(Length::Fill);
-
-                if term_count > 0 {
-                    details = details.push(
-                        row![
-                            bootstrap::terminal().size(11),
-                            text(format!("{term_count}")).size(11),
-                        ]
-                        .spacing(4)
-                        .align_y(iced::alignment::Vertical::Center),
-                    );
-                }
+                let chevron = if is_expanded {
+                    bootstrap::chevron_down().size(10)
+                } else {
+                    bootstrap::chevron_right().size(10)
+                };
 
                 let item_style = if is_selected {
                     button::primary
@@ -328,45 +326,114 @@ impl App {
                     button::secondary
                 };
 
-                col.push(
+                let name_btn = button(
                     row![
-                        button(details)
-                            .width(Length::Fill)
-                            .style(item_style)
-                            .padding([8, 10])
-                            .on_press(Message::SelectProject(project.id)),
-                        button(bootstrap::x_lg().size(12))
-                            .on_press(Message::RemoveProject(project.id))
-                            .padding([8, 8])
-                            .style(button::text),
+                        bootstrap::folder().size(14),
+                        text(&project.name).size(13),
                     ]
-                    .spacing(2),
+                    .spacing(6)
+                    .align_y(iced::alignment::Vertical::Center),
                 )
+                .width(Length::Fill)
+                .style(item_style)
+                .padding([6, 8])
+                .on_press(Message::SelectProject(project.id));
+
+                let name_row = row![
+                    button(chevron)
+                        .on_press(Message::ToggleProjectExpanded(project.id))
+                        .padding([4, 4])
+                        .style(button::text),
+                    name_btn,
+                    button(bootstrap::x_lg().size(10))
+                        .on_press(Message::RemoveProject(project.id))
+                        .padding([4, 4])
+                        .style(button::text),
+                ]
+                .spacing(2)
+                .align_y(iced::alignment::Vertical::Center);
+
+                let mut project_col = column![name_row].spacing(0);
+
+                if is_expanded {
+                    let path_row = container(
+                        text(project.working_dir.display().to_string())
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.45, 0.45, 0.45)),
+                    )
+                    .padding(Padding { top: 2.0, right: 8.0, bottom: 2.0, left: 28.0 });
+
+                    project_col = project_col.push(path_row);
+
+                    if let Some(project_terms) = self.terminals.get(&project.id) {
+                        for (i, ts) in project_terms.terminals.iter().enumerate() {
+                            let is_active_tab = is_selected
+                                && i == project_terms.active_index;
+                            let label = &ts.name;
+
+                            let term_row = row![
+                                bootstrap::terminal().size(11),
+                                text(label).size(11).width(Length::Fill),
+                                button(bootstrap::x_lg().size(9))
+                                    .on_press(Message::CloseTab(project.id, i))
+                                    .padding([1, 3])
+                                    .style(button::text),
+                            ]
+                            .spacing(6)
+                            .align_y(iced::alignment::Vertical::Center);
+
+                            let term_style = if is_active_tab {
+                                button::primary
+                            } else {
+                                button::text
+                            };
+
+                            project_col = project_col.push(
+                                button(term_row)
+                                    .width(Length::Fill)
+                                    .padding(Padding { top: 4.0, right: 8.0, bottom: 4.0, left: 28.0 })
+                                    .style(term_style)
+                                    .on_press(Message::SelectTab(project.id, i)),
+                            );
+                        }
+                    }
+
+                    // Add terminal button inside expanded project
+                    let add_term_row = row![
+                        bootstrap::plus_lg().size(11),
+                        text("New Terminal").size(11),
+                    ]
+                    .spacing(4)
+                    .align_y(iced::alignment::Vertical::Center);
+
+                    project_col = project_col.push(
+                        button(add_term_row)
+                            .width(Length::Fill)
+                            .padding(Padding { top: 4.0, right: 8.0, bottom: 4.0, left: 28.0 })
+                            .style(button::text)
+                            .on_press(Message::OpenTerminal(project.id)),
+                    );
+                }
+
+                col.push(project_col)
             });
 
-        let add_btn = button(
-            row![
-                bootstrap::plus_lg().size(14),
-                text("New Project").size(13),
-            ]
-            .spacing(6)
-            .align_y(iced::alignment::Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding([8, 10])
-        .style(button::secondary)
-        .on_press(Message::ShowAddProjectForm);
+        let header = row![
+            text("Projects")
+                .size(13)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
+                .width(Length::Fill),
+            button(bootstrap::plus_lg().size(14))
+                .on_press(Message::ShowAddProjectForm)
+                .padding([4, 6])
+                .style(button::text),
+        ]
+        .align_y(iced::alignment::Vertical::Center);
 
         container(
             column![
-                container(
-                    text("Projects")
-                        .size(13)
-                        .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
-                )
-                .padding([12, 10]),
+                container(header).padding([8, 10]),
                 scrollable(project_list.spacing(2).padding([0, 6])).height(Length::Fill),
-                container(add_btn).padding([6, 6]),
             ]
             .spacing(0),
         )
@@ -478,14 +545,28 @@ impl App {
                     project_terms
                         .terminals
                         .iter()
-                        .fold(row![], |r, ts| {
+                        .enumerate()
+                        .fold(row![], |r, (i, ts)| {
+                            let is_active = i == project_terms.active_index;
+                            let border_color = if is_active {
+                                iced::Color::from_rgb(0.3, 0.5, 0.9)
+                            } else {
+                                iced::Color::from_rgb(0.18, 0.18, 0.18)
+                            };
                             r.push(
                                 container(
                                     iced_term::TerminalView::show(&ts.terminal)
                                         .map(Message::Terminal),
                                 )
                                 .width(Length::Fill)
-                                .height(Length::Fill),
+                                .height(Length::Fill)
+                                .style(move |_| {
+                                    container::Style::default().border(iced::Border {
+                                        color: border_color,
+                                        width: if is_active { 2.0 } else { 1.0 },
+                                        radius: 0.into(),
+                                    })
+                                }),
                             )
                         })
                         .spacing(1);
@@ -506,18 +587,13 @@ impl App {
     fn view_tab_bar<'a>(
         &self,
         project_id: Uuid,
-        project_terms: &ProjectTerminals,
+        project_terms: &'a ProjectTerminals,
     ) -> Element<'a, Message> {
         let mut tabs = row![].spacing(1);
 
         for (i, ts) in project_terms.terminals.iter().enumerate() {
             let is_active = i == project_terms.active_index;
-            let label = ts
-                .title
-                .as_ref()
-                .filter(|t| !t.trim().is_empty())
-                .cloned()
-                .unwrap_or_else(|| format!("Terminal {}", i + 1));
+            let label = &ts.name;
 
             let tab_label = row![
                 bootstrap::terminal().size(12),
@@ -613,6 +689,7 @@ mod tests {
         App {
             config: AppConfig::default(),
             selected_project: None,
+            expanded_projects: std::collections::HashSet::new(),
             add_form: Default::default(),
             terminals: std::collections::HashMap::new(),
             next_terminal_id: 1,

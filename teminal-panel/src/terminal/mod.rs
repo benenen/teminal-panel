@@ -4,6 +4,7 @@ use std::path::Path;
 
 pub struct TerminalState {
     pub terminal: iced_term::Terminal,
+    pub name: String,
     pub title: Option<String>,
 }
 
