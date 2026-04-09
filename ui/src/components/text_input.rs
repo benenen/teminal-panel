@@ -32,8 +32,7 @@ impl<'a, Message: 'a + Clone> TextInput<'a, Message> {
     }
 
     pub fn into_element(self) -> Element<'a, Message> {
-        let mut input = widget::text_input(&self.placeholder, &self.value)
-            .font(Font::MONOSPACE);
+        let mut input = widget::text_input(&self.placeholder, &self.value).font(Font::MONOSPACE);
 
         if let Some(on_input) = self.on_input {
             input = input.on_input(on_input);

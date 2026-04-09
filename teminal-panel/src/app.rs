@@ -1,15 +1,15 @@
-use crate::project::{panel::AddProjectForm, Project};
 use crate::config::AppConfig;
+use crate::project::{panel::AddProjectForm, Project};
 use crate::terminal::{model::TerminalModel, render, subscription, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Length, Task, Theme};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
-use uuid::Uuid;
 use teminal_ui::components::{Button, TextInput};
 use teminal_ui::containers::Modal;
+use tokio::sync::mpsc;
+use uuid::Uuid;
 
 const PTY_CHANNEL_CAPACITY: usize = 256;
 
@@ -221,7 +221,9 @@ impl App {
             return false;
         }
 
-        self.config.projects.push(Project::new_local(name, working_dir));
+        self.config
+            .projects
+            .push(Project::new_local(name, working_dir));
         self.config.save();
         true
     }
@@ -300,24 +302,28 @@ impl App {
     }
 
     fn view_project_panel(&self) -> Element<'_, Message> {
-        let project_list = self.config.projects.iter().fold(column![], |column, project| {
-            let details = column![
-                text(&project.name).size(16),
-                text(project.working_dir.display().to_string()).size(12)
-            ]
-            .spacing(2)
-            .width(Length::Fill);
-
-            column.push(
-                row![
-                    button(details)
-                        .width(Length::Fill)
-                        .on_press(Message::SelectProject(project.id)),
-                    button(text("x")).on_press(Message::RemoveProject(project.id)),
+        let project_list = self
+            .config
+            .projects
+            .iter()
+            .fold(column![], |column, project| {
+                let details = column![
+                    text(&project.name).size(16),
+                    text(project.working_dir.display().to_string()).size(12)
                 ]
-                .spacing(6),
-            )
-        });
+                .spacing(2)
+                .width(Length::Fill);
+
+                column.push(
+                    row![
+                        button(details)
+                            .width(Length::Fill)
+                            .on_press(Message::SelectProject(project.id)),
+                        button(text("x")).on_press(Message::RemoveProject(project.id)),
+                    ]
+                    .spacing(6),
+                )
+            });
 
         container(
             column![
@@ -358,8 +364,7 @@ impl App {
                 } else {
                     column![
                         text(format!("Project: {}", project.name)).size(24),
-                        button(text("Open Terminal"))
-                            .on_press(Message::OpenTerminal(selected_id)),
+                        button(text("Open Terminal")).on_press(Message::OpenTerminal(selected_id)),
                     ]
                     .spacing(8)
                 }
@@ -634,10 +639,7 @@ mod tests {
 
             assert_eq!(app.config.projects.len(), 1);
             assert_eq!(app.config.projects[0].name, "Local agent");
-            assert_eq!(
-                app.config.projects[0].working_dir,
-                workspace_dir.clone()
-            );
+            assert_eq!(app.config.projects[0].working_dir, workspace_dir.clone());
             assert!(!app.add_form.visible);
             assert_eq!(app.add_form.selected_dir, None);
 
@@ -654,7 +656,9 @@ mod tests {
 
             let _ = app.update(Message::ShowAddProjectForm);
             let _ = app.update(Message::FormNameChanged("Local agent".into()));
-            let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/tmp/missing-directory"))));
+            let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from(
+                "/tmp/missing-directory",
+            ))));
             let _ = app.update(Message::SubmitAddProjectForm);
 
             assert!(app.config.projects.is_empty());
@@ -756,10 +760,7 @@ mod tests {
         let _ = app.update(Message::PtyOutput(project_id, b"\x1b[31mR".to_vec()));
 
         // Verify the terminal processed the ANSI escape sequence
-        let terminal = app
-            .terminals
-            .get(&project_id)
-            .expect("terminal exists");
+        let terminal = app.terminals.get(&project_id).expect("terminal exists");
         // After processing output, the model should be marked dirty
         assert!(terminal.model.is_dirty());
     }
@@ -905,7 +906,9 @@ mod tests {
         let mut app = test_app();
 
         let _ = app.update(Message::ShowAddProjectForm);
-        let _ = app.update(Message::ProjectFolderSelected(Some(std::path::PathBuf::from("/tmp/demo"))));
+        let _ = app.update(Message::ProjectFolderSelected(Some(
+            std::path::PathBuf::from("/tmp/demo"),
+        )));
         let _ = app.update(Message::ProjectFolderSelected(None));
 
         assert_eq!(

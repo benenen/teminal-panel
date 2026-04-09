@@ -1,8 +1,8 @@
-use wezterm_term::Terminal;
-use wezterm_escape_parser::parser::Parser;
-use wezterm_cell::UnicodeVersion;
-use std::sync::Arc;
 use std::io::Write;
+use std::sync::Arc;
+use wezterm_cell::UnicodeVersion;
+use wezterm_escape_parser::parser::Parser;
+use wezterm_term::Terminal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalSize {

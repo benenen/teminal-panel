@@ -64,7 +64,7 @@ mod tests {
     fn config_with_projects(projects: Vec<Project>) -> AppConfig {
         AppConfig { projects }
     }
- 
+
     #[test]
     fn legacy_agents_toml_deserializes_into_projects() {
         let compat: AppConfigCompat = toml::from_str(

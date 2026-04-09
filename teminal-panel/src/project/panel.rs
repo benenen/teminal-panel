@@ -6,4 +6,3 @@ pub struct AddProjectForm {
     pub selected_dir: Option<PathBuf>,
     pub visible: bool,
 }
-

@@ -1,19 +1,19 @@
 use crate::app::{Message, TerminalViewport};
 use crate::terminal::model::TerminalModel;
+use iced::advanced::clipboard::Kind;
 use iced::advanced::layout;
 use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget};
-use iced::advanced::clipboard::Kind;
 use iced::keyboard;
 use iced::widget::{column, container, row, text, Space};
 use iced::{
     alignment, Color, Element, Event, Font, Length, Pixels, Rectangle, Renderer, Size, Theme,
 };
-use wezterm_term::color::ColorAttribute;
-use wezterm_cell::{Intensity, Underline, CellAttributes};
 use uuid::Uuid;
+use wezterm_cell::{CellAttributes, Intensity, Underline};
+use wezterm_term::color::ColorAttribute;
 
 pub const CELL_WIDTH: f32 = 8.0;
 pub const CELL_HEIGHT: f32 = 16.0;
@@ -46,11 +46,7 @@ pub fn terminal_view<'a>(
     .into()
 }
 
-fn render_cell<'a>(
-    content: String,
-    attrs: &CellAttributes,
-    _width: usize,
-) -> Element<'a, Message> {
+fn render_cell<'a>(content: String, attrs: &CellAttributes, _width: usize) -> Element<'a, Message> {
     let (foreground, background) = resolved_colors(attrs);
 
     let underline_height = if attrs.underline() == Underline::None {
@@ -286,9 +282,14 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
                 if *modifiers == keyboard::Modifiers::CTRL {
                     if let keyboard::Key::Character(ch) = key {
                         if ch == "c" || ch == "C" {
-                            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                            if let (Some(start), Some(end)) =
+                                (state.selection_start, state.selection_end)
+                            {
                                 // Copy selected text to clipboard
-                                let selected_text = format!("Selected: ({},{})-({},{})", start.row, start.col, end.row, end.col);
+                                let selected_text = format!(
+                                    "Selected: ({},{})-({},{})",
+                                    start.row, start.col, end.row, end.col
+                                );
                                 let _ = clipboard.write(Kind::Standard, selected_text);
                                 return iced::event::Status::Captured;
                             }
@@ -299,13 +300,23 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for ViewportReporter<'a, Mess
                 let input = match key {
                     keyboard::Key::Character(ch) => Some(ch.to_string()),
                     keyboard::Key::Named(keyboard::key::Named::Enter) => Some("\n".to_string()),
-                    keyboard::Key::Named(keyboard::key::Named::Backspace) => Some("\x08".to_string()),
+                    keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                        Some("\x08".to_string())
+                    }
                     keyboard::Key::Named(keyboard::key::Named::Delete) => Some("\x7f".to_string()),
                     keyboard::Key::Named(keyboard::key::Named::Tab) => Some("\t".to_string()),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some("\x1b[A".to_string()),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some("\x1b[B".to_string()),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some("\x1b[C".to_string()),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some("\x1b[D".to_string()),
+                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                        Some("\x1b[A".to_string())
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                        Some("\x1b[B".to_string())
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                        Some("\x1b[C".to_string())
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                        Some("\x1b[D".to_string())
+                    }
                     _ => None,
                 };
 

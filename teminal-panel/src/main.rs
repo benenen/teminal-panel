@@ -1,6 +1,6 @@
-mod project;
 mod app;
 mod config;
+mod project;
 mod terminal;
 
 use app::App;
