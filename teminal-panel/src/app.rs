@@ -1,8 +1,9 @@
 use crate::config::AppConfig;
 use crate::project::{panel::AddProjectForm, Project};
-use crate::terminal::{settings_for_working_dir, TerminalState};
+use crate::terminal::{settings_for_working_dir, DisplayMode, ProjectTerminals, TerminalState};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Length, Task, Theme};
+use iced_fonts::bootstrap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use teminal_ui::components::{Button, TextInput};
@@ -13,7 +14,7 @@ pub struct App {
     pub config: AppConfig,
     pub selected_project: Option<Uuid>,
     pub add_form: AddProjectForm,
-    pub terminals: HashMap<Uuid, TerminalState>,
+    pub terminals: HashMap<Uuid, ProjectTerminals>,
     pub next_terminal_id: u64,
 }
 
@@ -29,6 +30,9 @@ pub enum Message {
     ProjectFolderSelected(Option<PathBuf>),
     SubmitAddProjectForm,
     OpenTerminal(Uuid),
+    SelectTab(Uuid, usize),
+    CloseTab(Uuid, usize),
+    ToggleDisplayMode(Uuid),
     Terminal(iced_term::Event),
 }
 
@@ -97,15 +101,11 @@ impl App {
                 }
             }
             Message::OpenTerminal(project_id) => {
-                if self.terminals.contains_key(&project_id) {
-                    return Task::none();
-                }
-
                 if let Some(project) = self
                     .config
                     .projects
                     .iter()
-                    .find(|project| project.id == project_id)
+                    .find(|p| p.id == project_id)
                 {
                     match iced_term::Terminal::new(
                         self.next_terminal_id,
@@ -115,14 +115,17 @@ impl App {
                             self.next_terminal_id += 1;
                             let widget_id = terminal.widget_id().clone();
 
-                            self.terminals.insert(
-                                project_id,
-                                TerminalState {
-                                    project_id,
-                                    terminal,
-                                    title: None,
-                                },
-                            );
+                            let project_terms = self
+                                .terminals
+                                .entry(project_id)
+                                .or_insert_with(ProjectTerminals::new);
+
+                            project_terms.terminals.push(TerminalState {
+                                terminal,
+                                title: None,
+                            });
+                            project_terms.active_index =
+                                project_terms.terminals.len() - 1;
 
                             return iced_term::TerminalView::focus(widget_id);
                         }
@@ -132,30 +135,67 @@ impl App {
                     }
                 }
             }
+            Message::SelectTab(project_id, index) => {
+                if let Some(project_terms) = self.terminals.get_mut(&project_id) {
+                    if index < project_terms.terminals.len() {
+                        project_terms.active_index = index;
+                        let widget_id = project_terms.terminals[index]
+                            .terminal
+                            .widget_id()
+                            .clone();
+                        return iced_term::TerminalView::focus(widget_id);
+                    }
+                }
+            }
+            Message::CloseTab(project_id, index) => {
+                if let Some(project_terms) = self.terminals.get_mut(&project_id) {
+                    project_terms.remove_terminal(index);
+                    if project_terms.terminals.is_empty() {
+                        self.terminals.remove(&project_id);
+                    }
+                }
+            }
+            Message::ToggleDisplayMode(project_id) => {
+                if let Some(project_terms) = self.terminals.get_mut(&project_id) {
+                    project_terms.display_mode = match project_terms.display_mode {
+                        DisplayMode::Tabs => DisplayMode::Panel,
+                        DisplayMode::Panel => DisplayMode::Tabs,
+                    };
+                }
+            }
             Message::Terminal(iced_term::Event::BackendCall(term_id, cmd)) => {
-                let mut closed_project = None;
+                let mut closed = None;
 
-                if let Some((project_id, terminal_state)) = self
-                    .terminals
-                    .iter_mut()
-                    .find(|(_, terminal)| terminal.terminal.id == term_id)
-                {
-                    match terminal_state
-                        .terminal
-                        .handle(iced_term::Command::ProxyToBackend(cmd))
+                for (project_id, project_terms) in self.terminals.iter_mut() {
+                    if let Some((idx, ts)) = project_terms
+                        .terminals
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_, ts)| ts.terminal.id == term_id)
                     {
-                        iced_term::actions::Action::Shutdown => {
-                            closed_project = Some(*project_id);
+                        match ts
+                            .terminal
+                            .handle(iced_term::Command::ProxyToBackend(cmd))
+                        {
+                            iced_term::actions::Action::Shutdown => {
+                                closed = Some((*project_id, idx));
+                            }
+                            iced_term::actions::Action::ChangeTitle(title) => {
+                                ts.title = Some(title);
+                            }
+                            iced_term::actions::Action::Ignore => {}
                         }
-                        iced_term::actions::Action::ChangeTitle(title) => {
-                            terminal_state.title = Some(title);
-                        }
-                        iced_term::actions::Action::Ignore => {}
+                        break;
                     }
                 }
 
-                if let Some(project_id) = closed_project {
-                    self.terminals.remove(&project_id);
+                if let Some((project_id, idx)) = closed {
+                    if let Some(project_terms) = self.terminals.get_mut(&project_id) {
+                        project_terms.remove_terminal(idx);
+                        if project_terms.terminals.is_empty() {
+                            self.terminals.remove(&project_id);
+                        }
+                    }
                 }
             }
         }
@@ -179,8 +219,8 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let main_content = row![self.view_project_panel(), self.view_terminal_area()]
-            .spacing(16)
-            .padding(16);
+            .spacing(0)
+            .padding(0);
 
         if self.add_form.visible {
             let selected_dir = self
@@ -197,9 +237,10 @@ impl App {
                     .into_element(),
                 row![
                     text(selected_dir).size(12),
-                    Button::new("Choose Folder")
+                    button(bootstrap::folder_plus().size(14))
                         .on_press(Message::ChooseProjectFolder)
-                        .into_element(),
+                        .padding([4, 8])
+                        .style(button::secondary),
                 ]
                 .spacing(8)
                 .align_y(iced::alignment::Vertical::Center),
@@ -248,38 +289,98 @@ impl App {
             .config
             .projects
             .iter()
-            .fold(column![], |column, project| {
-                let details = column![
-                    text(&project.name).size(16),
-                    text(project.working_dir.display().to_string()).size(12)
-                ]
-                .spacing(2)
-                .width(Length::Fill);
+            .fold(column![], |col, project| {
+                let is_selected = self.selected_project == Some(project.id);
 
-                column.push(
+                let term_count = self
+                    .terminals
+                    .get(&project.id)
+                    .map(|pt| pt.terminals.len())
+                    .unwrap_or(0);
+
+                let name_row = row![
+                    bootstrap::folder().size(14),
+                    text(&project.name).size(13),
+                ]
+                .spacing(8)
+                .align_y(iced::alignment::Vertical::Center);
+
+                let path_text = text(project.working_dir.display().to_string())
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5));
+
+                let mut details = column![name_row, path_text].spacing(2).width(Length::Fill);
+
+                if term_count > 0 {
+                    details = details.push(
+                        row![
+                            bootstrap::terminal().size(11),
+                            text(format!("{term_count}")).size(11),
+                        ]
+                        .spacing(4)
+                        .align_y(iced::alignment::Vertical::Center),
+                    );
+                }
+
+                let item_style = if is_selected {
+                    button::primary
+                } else {
+                    button::secondary
+                };
+
+                col.push(
                     row![
                         button(details)
                             .width(Length::Fill)
+                            .style(item_style)
+                            .padding([8, 10])
                             .on_press(Message::SelectProject(project.id)),
-                        button(text("x")).on_press(Message::RemoveProject(project.id)),
+                        button(bootstrap::x_lg().size(12))
+                            .on_press(Message::RemoveProject(project.id))
+                            .padding([8, 8])
+                            .style(button::text),
                     ]
-                    .spacing(6),
+                    .spacing(2),
                 )
             });
 
+        let add_btn = button(
+            row![
+                bootstrap::plus_lg().size(14),
+                text("New Project").size(13),
+            ]
+            .spacing(6)
+            .align_y(iced::alignment::Vertical::Center),
+        )
+        .width(Length::Fill)
+        .padding([8, 10])
+        .style(button::secondary)
+        .on_press(Message::ShowAddProjectForm);
+
         container(
             column![
-                text("Projects").size(24),
-                scrollable(project_list.spacing(8)).height(Length::Fill),
-                Button::new("+ Add Project")
-                    .width(Length::Fill)
-                    .on_press(Message::ShowAddProjectForm)
-                    .into_element(),
+                container(
+                    text("Projects")
+                        .size(13)
+                        .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                )
+                .padding([12, 10]),
+                scrollable(project_list.spacing(2).padding([0, 6])).height(Length::Fill),
+                container(add_btn).padding([6, 6]),
             ]
-            .spacing(12),
+            .spacing(0),
         )
-        .width(Length::Fixed(240.0))
+        .width(Length::Fixed(220.0))
         .height(Length::Fill)
+        .style(|_| {
+            container::Style::default()
+                .background(iced::Color::from_rgb(0.1, 0.1, 0.1))
+                .border(iced::Border {
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.18),
+                    width: 1.0,
+                    radius: 0.into(),
+                })
+        })
         .into()
     }
 
@@ -289,51 +390,197 @@ impl App {
                 .config
                 .projects
                 .iter()
-                .find(|project| project.id == selected_id)
+                .find(|p| p.id == selected_id)
             {
-                if let Some(terminal) = self.terminals.get(&selected_id) {
-                    let title = terminal
-                        .title
-                        .as_ref()
-                        .filter(|title| !title.trim().is_empty())
-                        .map(|title| format!("Terminal: {} [{}]", project.name, title))
-                        .unwrap_or_else(|| format!("Terminal: {}", project.name));
-
-                    column![
-                        text(title).size(16),
-                        container(
-                            iced_term::TerminalView::show(&terminal.terminal)
-                                .map(Message::Terminal)
-                        )
-                        .height(Length::Fill),
-                    ]
-                    .spacing(8)
+                if let Some(project_terms) = self.terminals.get(&selected_id) {
+                    self.view_terminals(selected_id, &project.name, project_terms)
                 } else {
-                    column![
-                        text(format!("Project: {}", project.name)).size(24),
-                        button(text("Open Terminal")).on_press(Message::OpenTerminal(selected_id)),
-                    ]
-                    .spacing(8)
+                    self.view_empty_project(selected_id, &project.name)
                 }
             } else {
-                column![
-                    text("Project not found").size(24),
-                    text("Select a project to open a terminal")
-                ]
-                .spacing(8)
+                column![text("Project not found").size(14)].into()
             }
         } else {
-            column![
-                text("Select a project to open a terminal").size(24),
-                text("Terminal area placeholder"),
-            ]
-            .spacing(8)
+            container(
+                column![
+                    bootstrap::terminal_fill().size(48).color(iced::Color::from_rgb(0.25, 0.25, 0.25)),
+                    text("Select a project")
+                        .size(14)
+                        .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                ]
+                .spacing(12)
+                .align_x(iced::alignment::Horizontal::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
         };
 
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
+            .style(|_| {
+                container::Style::default()
+                    .background(iced::Color::from_rgb(0.08, 0.08, 0.08))
+            })
             .into()
+    }
+
+    fn view_empty_project<'a>(&self, project_id: Uuid, name: &str) -> Element<'a, Message> {
+        container(
+            column![
+                bootstrap::terminal_plus()
+                    .size(48)
+                    .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+                text(name.to_string()).size(16),
+                button(
+                    row![
+                        bootstrap::terminal_plus().size(14),
+                        text("Open Terminal").size(13),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::alignment::Vertical::Center),
+                )
+                .on_press(Message::OpenTerminal(project_id))
+                .padding([8, 16])
+                .style(button::primary),
+            ]
+            .spacing(12)
+            .align_x(iced::alignment::Horizontal::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+    }
+
+    fn view_terminals<'a>(
+        &'a self,
+        project_id: Uuid,
+        _project_name: &str,
+        project_terms: &'a ProjectTerminals,
+    ) -> Element<'a, Message> {
+        let tab_bar = self.view_tab_bar(project_id, project_terms);
+
+        let terminal_content: Element<'_, Message> = match project_terms.display_mode {
+            DisplayMode::Tabs => {
+                if let Some(ts) = project_terms.active_terminal() {
+                    iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal)
+                } else {
+                    text("No terminal").into()
+                }
+            }
+            DisplayMode::Panel => {
+                let panels =
+                    project_terms
+                        .terminals
+                        .iter()
+                        .fold(row![], |r, ts| {
+                            r.push(
+                                container(
+                                    iced_term::TerminalView::show(&ts.terminal)
+                                        .map(Message::Terminal),
+                                )
+                                .width(Length::Fill)
+                                .height(Length::Fill),
+                            )
+                        })
+                        .spacing(1);
+                panels.into()
+            }
+        };
+
+        column![
+            tab_bar,
+            container(terminal_content)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ]
+        .spacing(0)
+        .into()
+    }
+
+    fn view_tab_bar<'a>(
+        &self,
+        project_id: Uuid,
+        project_terms: &ProjectTerminals,
+    ) -> Element<'a, Message> {
+        let mut tabs = row![].spacing(1);
+
+        for (i, ts) in project_terms.terminals.iter().enumerate() {
+            let is_active = i == project_terms.active_index;
+            let label = ts
+                .title
+                .as_ref()
+                .filter(|t| !t.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("Terminal {}", i + 1));
+
+            let tab_label = row![
+                bootstrap::terminal().size(12),
+                text(label).size(12),
+                button(bootstrap::x_lg().size(10))
+                    .on_press(Message::CloseTab(project_id, i))
+                    .padding([2, 4])
+                    .style(button::text),
+            ]
+            .spacing(6)
+            .align_y(iced::alignment::Vertical::Center);
+
+            let tab_style = if is_active {
+                button::primary
+            } else {
+                button::secondary
+            };
+
+            tabs = tabs.push(
+                button(tab_label)
+                    .on_press(Message::SelectTab(project_id, i))
+                    .padding([6, 12])
+                    .style(tab_style),
+            );
+        }
+
+        let add_tab = button(bootstrap::plus_lg().size(12))
+            .on_press(Message::OpenTerminal(project_id))
+            .padding([6, 8])
+            .style(button::text);
+
+        let mode_icon = match project_terms.display_mode {
+            DisplayMode::Tabs => bootstrap::layout_split().size(14),
+            DisplayMode::Panel => bootstrap::layout_text_window().size(14),
+        };
+        let mode_btn = button(mode_icon)
+            .on_press(Message::ToggleDisplayMode(project_id))
+            .padding([6, 8])
+            .style(button::text);
+
+        container(
+            row![
+                scrollable(tabs).direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::default(),
+                )),
+                add_tab,
+                mode_btn,
+            ]
+            .spacing(4)
+            .align_y(iced::alignment::Vertical::Center),
+        )
+        .width(Length::Fill)
+        .padding([2, 4])
+        .style(|_| {
+            container::Style::default()
+                .background(iced::Color::from_rgb(0.12, 0.12, 0.12))
+                .border(iced::Border {
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.18),
+                    width: 1.0,
+                    radius: 0.into(),
+                })
+        })
+        .into()
     }
 
     pub fn theme(&self) -> Theme {
@@ -341,9 +588,12 @@ impl App {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        iced::Subscription::batch(self.terminals.values().map(|terminal| {
-            terminal.terminal.subscription().map(Message::Terminal)
-        }))
+        iced::Subscription::batch(
+            self.terminals
+                .values()
+                .flat_map(|pt| pt.terminals.iter())
+                .map(|ts| ts.terminal.subscription().map(Message::Terminal)),
+        )
     }
 }
 
@@ -488,9 +738,88 @@ mod tests {
             let project_id = app.config.projects[0].id;
             let _ = app.update(Message::OpenTerminal(project_id));
 
-            let terminal = app.terminals.get(&project_id).expect("terminal exists");
-            assert_eq!(terminal.project_id, project_id);
-            assert_eq!(terminal.terminal.id, 1);
+            let project_terms = app.terminals.get(&project_id).expect("terminals exist");
+            assert_eq!(project_terms.terminals.len(), 1);
+            assert_eq!(project_terms.terminals[0].terminal.id, 1);
+            assert_eq!(project_terms.active_index, 0);
+        });
+    }
+
+    #[test]
+    fn open_multiple_terminals_for_same_project() {
+        with_temp_config_dir(|workspace_dir: &PathBuf| {
+            let mut app = test_app();
+
+            let _ = app.update(Message::AddProject {
+                name: "Local project".into(),
+                working_dir: workspace_dir.display().to_string(),
+            });
+
+            let project_id = app.config.projects[0].id;
+            let _ = app.update(Message::OpenTerminal(project_id));
+            let _ = app.update(Message::OpenTerminal(project_id));
+
+            let project_terms = app.terminals.get(&project_id).expect("terminals exist");
+            assert_eq!(project_terms.terminals.len(), 2);
+            assert_eq!(project_terms.active_index, 1);
+        });
+    }
+
+    #[test]
+    fn select_tab_changes_active_index() {
+        with_temp_config_dir(|workspace_dir: &PathBuf| {
+            let mut app = test_app();
+
+            let _ = app.update(Message::AddProject {
+                name: "Local project".into(),
+                working_dir: workspace_dir.display().to_string(),
+            });
+
+            let project_id = app.config.projects[0].id;
+            let _ = app.update(Message::OpenTerminal(project_id));
+            let _ = app.update(Message::OpenTerminal(project_id));
+            let _ = app.update(Message::SelectTab(project_id, 0));
+
+            let project_terms = app.terminals.get(&project_id).expect("terminals exist");
+            assert_eq!(project_terms.active_index, 0);
+        });
+    }
+
+    #[test]
+    fn close_tab_removes_terminal() {
+        with_temp_config_dir(|workspace_dir: &PathBuf| {
+            let mut app = test_app();
+
+            let _ = app.update(Message::AddProject {
+                name: "Local project".into(),
+                working_dir: workspace_dir.display().to_string(),
+            });
+
+            let project_id = app.config.projects[0].id;
+            let _ = app.update(Message::OpenTerminal(project_id));
+            let _ = app.update(Message::OpenTerminal(project_id));
+            let _ = app.update(Message::CloseTab(project_id, 0));
+
+            let project_terms = app.terminals.get(&project_id).expect("terminals exist");
+            assert_eq!(project_terms.terminals.len(), 1);
+        });
+    }
+
+    #[test]
+    fn close_last_tab_removes_project_terminals() {
+        with_temp_config_dir(|workspace_dir: &PathBuf| {
+            let mut app = test_app();
+
+            let _ = app.update(Message::AddProject {
+                name: "Local project".into(),
+                working_dir: workspace_dir.display().to_string(),
+            });
+
+            let project_id = app.config.projects[0].id;
+            let _ = app.update(Message::OpenTerminal(project_id));
+            let _ = app.update(Message::CloseTab(project_id, 0));
+
+            assert!(!app.terminals.contains_key(&project_id));
         });
     }
 

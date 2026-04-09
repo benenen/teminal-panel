@@ -1,11 +1,45 @@
 use iced::Font;
+use std::collections::HashMap;
 use std::path::Path;
-use uuid::Uuid;
 
 pub struct TerminalState {
-    pub project_id: Uuid,
     pub terminal: iced_term::Terminal,
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    Tabs,
+    Panel,
+}
+
+pub struct ProjectTerminals {
+    pub terminals: Vec<TerminalState>,
+    pub active_index: usize,
+    pub display_mode: DisplayMode,
+}
+
+impl ProjectTerminals {
+    pub fn new() -> Self {
+        Self {
+            terminals: Vec::new(),
+            active_index: 0,
+            display_mode: DisplayMode::Tabs,
+        }
+    }
+
+    pub fn active_terminal(&self) -> Option<&TerminalState> {
+        self.terminals.get(self.active_index)
+    }
+
+    pub fn remove_terminal(&mut self, index: usize) {
+        if index < self.terminals.len() {
+            self.terminals.remove(index);
+            if self.active_index >= self.terminals.len() && !self.terminals.is_empty() {
+                self.active_index = self.terminals.len() - 1;
+            }
+        }
+    }
 }
 
 pub fn settings_for_working_dir(working_dir: &Path) -> iced_term::settings::Settings {
@@ -18,6 +52,10 @@ pub fn settings_for_working_dir(working_dir: &Path) -> iced_term::settings::Sett
         backend: iced_term::settings::BackendSettings {
             program: default_shell(),
             working_directory: Some(working_dir.to_path_buf()),
+            env: HashMap::from([
+                ("TERM".into(), "xterm-256color".into()),
+                ("COLORTERM".into(), "truecolor".into()),
+            ]),
             ..Default::default()
         },
         ..Default::default()
