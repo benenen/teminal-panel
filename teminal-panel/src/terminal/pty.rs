@@ -1,7 +1,8 @@
 use crate::terminal::model::TerminalSize;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use std::ffi::OsString;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -101,9 +102,31 @@ pub fn spawn_shell(
 }
 
 fn shell_command(working_dir: &Path) -> CommandBuilder {
+    #[cfg(windows)]
+    let mut command = CommandBuilder::new(windows_shell_program_from_env(std::env::var_os));
+
+    #[cfg(not(windows))]
     let mut command = CommandBuilder::new_default_prog();
+
     command.cwd(working_dir);
     command
+}
+
+fn windows_shell_program_from_env(get_env: impl Fn(&str) -> Option<OsString>) -> OsString {
+    get_env("COMSPEC")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            windows_directory_from_env(&get_env)
+                .map(|dir| dir.join("System32").join("cmd.exe").into_os_string())
+        })
+        .unwrap_or_else(|| OsString::from(r"C:\Windows\System32\cmd.exe"))
+}
+
+fn windows_directory_from_env(get_env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    get_env("SystemRoot")
+        .or_else(|| get_env("WINDIR"))
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -152,5 +175,38 @@ mod tests {
         let mut handle = spawn_shell(&working_dir, tx, Uuid::new_v4()).expect("spawn shell");
 
         handle.lifecycle.shutdown();
+    }
+
+    #[test]
+    fn windows_shell_program_prefers_comspec() {
+        let shell = super::windows_shell_program_from_env(|key| {
+            (key == "COMSPEC").then(|| OsString::from(r"C:\Windows\System32\cmd.exe"))
+        });
+
+        assert_eq!(shell, OsString::from(r"C:\Windows\System32\cmd.exe"));
+    }
+
+    #[test]
+    fn windows_shell_program_falls_back_to_cmd_exe() {
+        let shell = super::windows_shell_program_from_env(|_| None);
+
+        assert_eq!(shell, OsString::from(r"C:\Windows\System32\cmd.exe"));
+    }
+
+    #[test]
+    fn windows_shell_program_ignores_empty_comspec() {
+        let shell =
+            super::windows_shell_program_from_env(|key| (key == "COMSPEC").then(OsString::new));
+
+        assert_eq!(shell, OsString::from(r"C:\Windows\System32\cmd.exe"));
+    }
+
+    #[test]
+    fn windows_shell_program_falls_back_to_system_root() {
+        let shell = super::windows_shell_program_from_env(|key| {
+            (key == "SystemRoot").then(|| OsString::from(r"C:\Windows"))
+        });
+
+        assert_eq!(shell, OsString::from(r"C:\Windows\System32\cmd.exe"));
     }
 }
