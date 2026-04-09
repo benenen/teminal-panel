@@ -3,7 +3,6 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub struct TerminalState {
-    pub id: Uuid,
     pub project_id: Uuid,
     pub terminal: iced_term::Terminal,
     pub title: Option<String>,
@@ -17,8 +16,9 @@ pub fn settings_for_working_dir(working_dir: &Path) -> iced_term::settings::Sett
             font_type: terminal_font(),
         },
         backend: iced_term::settings::BackendSettings {
-            shell: default_shell(),
+            program: default_shell(),
             working_directory: Some(working_dir.to_path_buf()),
+            ..Default::default()
         },
         ..Default::default()
     }

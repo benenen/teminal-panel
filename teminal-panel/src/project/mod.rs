@@ -9,8 +9,6 @@ pub struct Project {
     pub connection: Connection,
     pub working_dir: PathBuf,
     pub is_git_repo: bool,
-    #[serde(skip)]
-    pub status: ProjectStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,15 +34,6 @@ pub enum SshAuth {
     Agent,
 }
 
-#[derive(Debug, Clone, Default)]
-pub enum ProjectStatus {
-    #[default]
-    Disconnected,
-    Connected,
-    Connecting,
-    Error(String),
-}
-
 impl Project {
     pub fn new_local(name: String, working_dir: PathBuf) -> Self {
         let is_git_repo = working_dir.join(".git").exists();
@@ -54,7 +43,6 @@ impl Project {
             connection: Connection::Local,
             working_dir,
             is_git_repo,
-            status: ProjectStatus::Disconnected,
         }
     }
 }

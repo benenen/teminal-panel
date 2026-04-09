@@ -22,11 +22,9 @@ pub enum Message {
     SelectProject(Uuid),
     AddProject { name: String, working_dir: String },
     RemoveProject(Uuid),
-    ProjectStatusChanged(Uuid, String),
     ShowAddProjectForm,
     HideAddProjectForm,
     FormNameChanged(String),
-    FormDirChanged(String),
     ChooseProjectFolder,
     ProjectFolderSelected(Option<PathBuf>),
     SubmitAddProjectForm,
@@ -66,7 +64,6 @@ impl App {
 
                 self.config.save();
             }
-            Message::ProjectStatusChanged(_, _) => {}
             Message::ShowAddProjectForm => {
                 self.add_form.visible = true;
             }
@@ -76,7 +73,6 @@ impl App {
             Message::FormNameChanged(value) => {
                 self.add_form.name = value;
             }
-            Message::FormDirChanged(_value) => {}
             Message::ChooseProjectFolder => {
                 return Task::perform(
                     async {
@@ -111,27 +107,32 @@ impl App {
                     .iter()
                     .find(|project| project.id == project_id)
                 {
-                    let terminal = iced_term::Terminal::new(
+                    match iced_term::Terminal::new(
                         self.next_terminal_id,
                         settings_for_working_dir(&project.working_dir),
-                    );
-                    self.next_terminal_id += 1;
-                    let widget_id = terminal.widget_id();
+                    ) {
+                        Ok(terminal) => {
+                            self.next_terminal_id += 1;
+                            let widget_id = terminal.widget_id().clone();
 
-                    self.terminals.insert(
-                        project_id,
-                        TerminalState {
-                            id: project_id,
-                            project_id,
-                            terminal,
-                            title: None,
-                        },
-                    );
+                            self.terminals.insert(
+                                project_id,
+                                TerminalState {
+                                    project_id,
+                                    terminal,
+                                    title: None,
+                                },
+                            );
 
-                    return iced_term::TerminalView::focus(widget_id);
+                            return iced_term::TerminalView::focus(widget_id);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to create terminal: {e}");
+                        }
+                    }
                 }
             }
-            Message::Terminal(iced_term::Event::CommandReceived(term_id, cmd)) => {
+            Message::Terminal(iced_term::Event::BackendCall(term_id, cmd)) => {
                 let mut closed_project = None;
 
                 if let Some((project_id, terminal_state)) = self
@@ -139,15 +140,17 @@ impl App {
                     .iter_mut()
                     .find(|(_, terminal)| terminal.terminal.id == term_id)
                 {
-                    match terminal_state.terminal.update(cmd) {
+                    match terminal_state
+                        .terminal
+                        .handle(iced_term::Command::ProxyToBackend(cmd))
+                    {
                         iced_term::actions::Action::Shutdown => {
                             closed_project = Some(*project_id);
                         }
                         iced_term::actions::Action::ChangeTitle(title) => {
                             terminal_state.title = Some(title);
                         }
-                        iced_term::actions::Action::Redraw | iced_term::actions::Action::Ignore => {
-                        }
+                        iced_term::actions::Action::Ignore => {}
                     }
                 }
 
@@ -333,17 +336,13 @@ impl App {
             .into()
     }
 
-    pub fn theme() -> Theme {
+    pub fn theme(&self) -> Theme {
         Theme::Dark
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
         iced::Subscription::batch(self.terminals.values().map(|terminal| {
-            iced::Subscription::run_with_id(
-                terminal.terminal.id,
-                iced_term::Subscription::new(terminal.terminal.id).event_stream(),
-            )
-            .map(Message::Terminal)
+            terminal.terminal.subscription().map(Message::Terminal)
         }))
     }
 }
