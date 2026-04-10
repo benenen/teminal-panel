@@ -1,4 +1,4 @@
-use super::{App, Message};
+use super::{panel_interaction_mode, App, Message, PanelInteractionMode};
 use crate::config::AppConfig;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -187,6 +187,50 @@ fn select_tab_changes_active_index() {
         let project_terms = app.terminals.get(&project_id).expect("terminals exist");
         assert_eq!(project_terms.active_index, 0);
     });
+}
+
+#[test]
+fn backend_events_do_not_override_user_selected_tab() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::AddProject {
+            name: "Local project".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::OpenTerminal(project_id));
+        let _ = app.update(Message::OpenTerminal(project_id));
+        let _ = app.update(Message::SelectTab(project_id, 0));
+
+        let background_terminal_id = app
+            .terminals
+            .get(&project_id)
+            .and_then(|project_terms| project_terms.terminals.get(1))
+            .map(|terminal_state| terminal_state.terminal.id)
+            .expect("second terminal exists");
+
+        let _ = app.update(Message::Terminal(iced_term::Event::BackendCall(
+            background_terminal_id,
+            iced_term::BackendCommand::ProcessAlacrittyEvent(iced_term::AlacrittyEvent::Title(
+                "background-shell".into(),
+            )),
+        )));
+
+        let project_terms = app.terminals.get(&project_id).expect("terminals exist");
+        assert_eq!(project_terms.active_index, 0);
+        assert_eq!(project_terms.terminals[1].title.as_deref(), Some("background-shell"));
+    });
+}
+
+#[test]
+fn inactive_panel_clicks_activate_panel_before_terminal_interaction() {
+    assert_eq!(
+        panel_interaction_mode(false),
+        PanelInteractionMode::ClickToActivate
+    );
+    assert_eq!(panel_interaction_mode(true), PanelInteractionMode::Direct);
 }
 
 #[test]

@@ -44,6 +44,20 @@ pub enum Message {
     Terminal(iced_term::Event),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelInteractionMode {
+    Direct,
+    ClickToActivate,
+}
+
+fn panel_interaction_mode(is_active: bool) -> PanelInteractionMode {
+    if is_active {
+        PanelInteractionMode::Direct
+    } else {
+        PanelInteractionMode::ClickToActivate
+    }
+}
+
 impl App {
     pub fn new() -> (Self, Task<Message>) {
         (
@@ -210,10 +224,6 @@ impl App {
                         .enumerate()
                         .find(|(_, ts)| ts.terminal.id == term_id)
                     {
-                        self.selected_project = Some(*project_id);
-                        self.expanded_projects.insert(*project_id);
-                        project_terms.active_index = idx;
-
                         match ts.terminal.handle(iced_term::Command::ProxyToBackend(cmd)) {
                             iced_term::actions::Action::Shutdown => {
                                 closed = Some((*project_id, idx));
@@ -617,6 +627,7 @@ impl App {
                     .enumerate()
                     .fold(row![], |r, (i, ts)| {
                         let is_active = i == project_terms.active_index;
+                        let interaction_mode = panel_interaction_mode(is_active);
                         let border_color = if is_active {
                             iced::Color::from_rgb(0.3, 0.5, 0.9)
                         } else {
@@ -629,33 +640,46 @@ impl App {
                         };
 
                         let term_view = iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal);
+                        let overlay: Element<'_, Message> = match interaction_mode {
+                            PanelInteractionMode::Direct => container(text(""))
+                                .width(Length::Fill)
+                                .height(Length::Fill)
+                                .style(move |_| {
+                                    container::Style::default().background(dim_overlay)
+                                })
+                                .into(),
+                            PanelInteractionMode::ClickToActivate => mouse_area(
+                                container(text(""))
+                                    .width(Length::Fill)
+                                    .height(Length::Fill)
+                                    .style(move |_| {
+                                        container::Style::default().background(dim_overlay)
+                                    }),
+                            )
+                            .on_press(Message::SelectTab(project_id, i))
+                            .into(),
+                        };
                         let panel = stack![
                             container(term_view)
                                 .width(Length::Fill)
                                 .height(Length::Fill),
-                            container(text(""))
-                                .width(Length::Fill)
-                                .height(Length::Fill)
-                                .style(move |_| container::Style::default().background(dim_overlay)),
+                            overlay,
                         ];
 
                         r.push(
-                            mouse_area(
-                                container(panel)
-                                    .width(Length::Fill)
-                                    .height(Length::Fill)
-                                    .style(move |_| {
-                                        container::Style::default()
-                                            .background(iced::Color::from_rgb(0.08, 0.08, 0.08))
-                                            .border(iced::Border {
-                                                color: border_color,
-                                                width: if is_active { 2.0 } else { 1.0 },
-                                                radius: 0.into(),
-                                            })
-                                    })
-                                    .padding(0),
-                            )
-                            .on_press(Message::SelectTab(project_id, i))
+                            container(panel)
+                                .width(Length::Fill)
+                                .height(Length::Fill)
+                                .style(move |_| {
+                                    container::Style::default()
+                                        .background(iced::Color::from_rgb(0.08, 0.08, 0.08))
+                                        .border(iced::Border {
+                                            color: border_color,
+                                            width: if is_active { 2.0 } else { 1.0 },
+                                            radius: 0.into(),
+                                        })
+                                })
+                                .padding(0)
                         )
                     })
                     .spacing(6);
