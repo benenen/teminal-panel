@@ -1402,7 +1402,7 @@ dependencies = [
 [[package]]
 name = "iced_term"
 version = "0.8.0"
-source = "git+https://github.com/Harzu/iced_term?branch=master#f2cb05470cf468aaf23b2ee896ca3e43e29d2d41"
+source = "git+https://github.com/benenen/iced_term?branch=teminal-panel#98bb2843f0f1939e8fbc8251c7eb1b9c4fdd3a3e"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
