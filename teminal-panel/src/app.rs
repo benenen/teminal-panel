@@ -6,7 +6,7 @@ use iced::{Element, Length, Padding, Task, Theme};
 use iced_fonts::bootstrap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use teminal_ui::components::{Button, TextInput};
+use teminal_ui::components::{Button, TextInput, TruncatedTooltipText};
 use teminal_ui::containers::Modal;
 use uuid::Uuid;
 
@@ -24,6 +24,7 @@ pub struct App {
 #[derive(Debug, Clone)]
 pub enum Message {
     SelectProject(Uuid),
+    #[cfg(test)]
     AddProject { name: String, working_dir: String },
     RemoveProject(Uuid),
     HoverProject(Option<Uuid>),
@@ -81,6 +82,7 @@ impl App {
                 self.selected_project = Some(id);
                 self.expanded_projects.insert(id);
             }
+            #[cfg(test)]
             Message::AddProject { name, working_dir } => {
                 self.add_local_project(name, PathBuf::from(working_dir));
             }
@@ -426,6 +428,7 @@ impl App {
                     for (i, ts) in project_terms.terminals.iter().enumerate() {
                         let is_active_tab = is_selected && i == project_terms.active_index;
                         let is_editing = self.editing_terminal == Some((project.id, i));
+                        let display_name = ts.title.as_deref().unwrap_or(&ts.name);
 
                         let name_field: Element<'_, Message> = if is_editing {
                             text_input("Terminal name", &ts.name)
@@ -435,12 +438,18 @@ impl App {
                                 .size(11)
                                 .into()
                         } else {
-                            button(text(&ts.name).size(11).width(Length::Fill))
-                                .on_press(Message::SelectTab(project.id, i))
-                                .style(button::text)
-                                .padding(0)
-                                .width(Length::Fill)
-                                .into()
+                            button(
+                                TruncatedTooltipText::new(display_name)
+                                    .max_chars(22)
+                                    .size(11)
+                                    .width(Length::Fill)
+                                    .into_element(),
+                            )
+                            .on_press(Message::SelectTab(project.id, i))
+                            .style(button::text)
+                            .padding(0)
+                            .width(Length::Fill)
+                            .into()
                         };
 
                         let term_row = row![
@@ -706,13 +715,19 @@ impl App {
 
         for (i, ts) in project_terms.terminals.iter().enumerate() {
             let is_active = i == project_terms.active_index;
+            let display_name = ts.title.as_deref().unwrap_or(&ts.name);
 
             let tab_label = row![
                 bootstrap::terminal().size(12),
-                button(text(&ts.name).size(12))
-                    .on_press(Message::SelectTab(project_id, i))
-                    .style(button::text)
-                    .padding(0),
+                button(
+                    TruncatedTooltipText::new(display_name)
+                        .max_chars(28)
+                        .size(12)
+                        .into_element(),
+                )
+                .on_press(Message::SelectTab(project_id, i))
+                .style(button::text)
+                .padding(0),
                 button(bootstrap::x_lg().size(10))
                     .on_press(Message::CloseTab(project_id, i))
                     .padding([2, 4])
