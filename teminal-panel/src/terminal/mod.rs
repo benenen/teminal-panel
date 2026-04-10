@@ -69,7 +69,12 @@ pub fn terminal_font() -> Font {
         return Font::with_name("NSimSun");
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        return Font::with_name("Menlo");
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         Font::MONOSPACE
     }
