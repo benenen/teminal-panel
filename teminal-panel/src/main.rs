@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod project;
+mod ssh;
 mod terminal;
 
 use app::App;

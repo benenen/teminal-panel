@@ -3,7 +3,10 @@ use crate::project::{
     panel::{AddProjectForm, ProjectConnectionKind},
     Connection, Project, SshAuth, SshService,
 };
-use crate::terminal::{settings_for_working_dir, DisplayMode, ProjectTerminals, TerminalState};
+use crate::terminal::{
+    settings_for_working_dir, DisplayMode, ProjectTerminals, RemoteFileEntry, RemoteFileState,
+    RemoteFileStatus, TerminalState,
+};
 use iced::{Element, Task, Theme};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -57,6 +60,11 @@ pub enum Message {
     SshServiceKeyPassphraseChanged(String),
     SubmitSshServiceForm,
     CancelSshServiceForm,
+    RequestRemoteFiles(Uuid),
+    RemoteFilesLoaded {
+        project_id: Uuid,
+        result: Result<Vec<RemoteFileEntry>, String>,
+    },
     OpenTerminal(Uuid),
     ToggleProjectExpanded(Uuid),
     SelectTab(Uuid, usize),
@@ -133,6 +141,7 @@ impl App {
             Message::SelectProject(id) => {
                 self.selected_project = Some(id);
                 self.expanded_projects.insert(id);
+                return self.maybe_request_remote_files(id);
             }
             #[cfg(test)]
             Message::AddProject { name, working_dir } => {
@@ -168,12 +177,24 @@ impl App {
                 self.add_form.connection_kind = kind;
                 if kind == ProjectConnectionKind::Local {
                     self.add_form.ssh_service_id = None;
+                    if self
+                        .add_form
+                        .selected_dir
+                        .as_ref()
+                        .is_some_and(|path| !path.is_dir())
+                    {
+                        self.add_form.selected_dir = None;
+                    }
                 }
             }
             Message::FormSshServiceSelected(service_id) => {
                 self.add_form.ssh_service_id = Some(service_id);
             }
             Message::ChooseProjectFolder => {
+                if self.add_form.connection_kind == ProjectConnectionKind::Ssh {
+                    return Task::none();
+                }
+
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
@@ -303,17 +324,108 @@ impl App {
                 self.editing_ssh_service = None;
                 self.ssh_service_form = Default::default();
             }
+            Message::RequestRemoteFiles(project_id) => {
+                let Some(project) = self.config.projects.iter().find(|project| project.id == project_id)
+                else {
+                    return Task::none();
+                };
+
+                let Connection::Ssh { service_id } = project.connection else {
+                    return Task::none();
+                };
+
+                let path = project.working_dir.clone();
+                let Some(service) = self
+                    .config
+                    .ssh_services
+                    .iter()
+                    .find(|service| service.id == service_id)
+                    .cloned()
+                else {
+                    self.ensure_project_terminals(project_id).remote_files = Some(RemoteFileState {
+                        path: path.display().to_string(),
+                        status: RemoteFileStatus::Error("SSH service not found".into()),
+                        entries: Vec::new(),
+                    });
+                    return Task::none();
+                };
+
+                if matches!(service.auth, SshAuth::Password(_)) {
+                    self.ensure_project_terminals(project_id).remote_files = Some(RemoteFileState {
+                        path: path.display().to_string(),
+                        status: RemoteFileStatus::Unsupported(
+                            "Remote browsing supports SSH agent/key auth only".into(),
+                        ),
+                        entries: Vec::new(),
+                    });
+                    return Task::none();
+                }
+
+                self.set_remote_files_loading(project_id, &path);
+
+                return Task::perform(
+                    async move { crate::ssh::load_remote_entries(&service, &path) },
+                    move |result| Message::RemoteFilesLoaded { project_id, result },
+                );
+            }
+            Message::RemoteFilesLoaded { project_id, result } => {
+                let remote_files = self
+                    .ensure_project_terminals(project_id)
+                    .remote_files
+                    .get_or_insert(RemoteFileState {
+                        path: String::new(),
+                        status: RemoteFileStatus::Idle,
+                        entries: Vec::new(),
+                    });
+
+                match result {
+                    Ok(entries) => {
+                        remote_files.status = RemoteFileStatus::Loaded;
+                        remote_files.entries = entries;
+                    }
+                    Err(error) => {
+                        remote_files.status = RemoteFileStatus::Error(error);
+                        remote_files.entries.clear();
+                    }
+                }
+            }
             Message::OpenTerminal(project_id) => {
                 if let Some(project) = self.config.projects.iter().find(|p| p.id == project_id) {
-                    match iced_term::Terminal::new(
-                        self.next_terminal_id,
-                        settings_for_working_dir(&project.working_dir),
-                    ) {
-                        Ok(terminal) => {
+                    let settings = match &project.connection {
+                        Connection::Local => settings_for_working_dir(&project.working_dir),
+                        Connection::Ssh { .. } => crate::terminal::settings_for_local_shell(),
+                    };
+
+                    match iced_term::Terminal::new(self.next_terminal_id, settings) {
+                        Ok(mut terminal) => {
                             self.next_terminal_id += 1;
                             let widget_id = terminal.widget_id().clone();
 
                             let project_name = project.name.clone();
+                            let ssh_bootstrap_title = match project.connection {
+                                Connection::Ssh { service_id } => self
+                                    .config
+                                    .ssh_services
+                                    .iter()
+                                    .find(|service| service.id == service_id)
+                                    .map(|service| {
+                                        let command = crate::ssh::build_terminal_bootstrap_command(
+                                            service,
+                                            &project.working_dir,
+                                        );
+                                        let _ = terminal.handle(iced_term::Command::ProxyToBackend(
+                                            iced_term::BackendCommand::Write(
+                                                format!("{}\r", command).into_bytes(),
+                                            ),
+                                        ));
+                                        format!(
+                                            "ssh: {}",
+                                            service.display_remote_location(&project.working_dir)
+                                        )
+                                    }),
+                                Connection::Local => None,
+                            };
+
                             let project_terms = self
                                 .terminals
                                 .entry(project_id)
@@ -323,7 +435,7 @@ impl App {
                             project_terms.terminals.push(TerminalState {
                                 terminal,
                                 name: format!("{} * {}", project_name, term_num),
-                                title: None,
+                                title: ssh_bootstrap_title,
                             });
                             project_terms.active_index = project_terms.terminals.len() - 1;
 
@@ -340,6 +452,7 @@ impl App {
             Message::ToggleProjectExpanded(id) => {
                 if !self.expanded_projects.remove(&id) {
                     self.expanded_projects.insert(id);
+                    return self.maybe_request_remote_files(id);
                 }
             }
             Message::SelectTab(project_id, index) => {
@@ -448,7 +561,7 @@ impl App {
             return false;
         };
 
-        if name.is_empty() || !working_dir.is_dir() {
+        if name.is_empty() {
             return false;
         }
 
@@ -493,6 +606,73 @@ impl App {
                 .flat_map(|pt| pt.terminals.iter())
                 .map(|ts| ts.terminal.subscription().map(Message::Terminal)),
         )
+    }
+}
+
+pub(crate) fn project_subtitle(project: &Project, services: &[SshService]) -> String {
+    match project.connection {
+        Connection::Local => project.working_dir.display().to_string(),
+        Connection::Ssh { service_id } => services
+            .iter()
+            .find(|service| service.id == service_id)
+            .map(|service| service.display_remote_location(&project.working_dir))
+            .unwrap_or_else(|| project.working_dir.display().to_string()),
+    }
+}
+
+pub(crate) fn remote_file_status_label(status: &RemoteFileStatus) -> Option<&str> {
+    match status {
+        RemoteFileStatus::Loading => Some("Loading remote files..."),
+        RemoteFileStatus::Error(message) | RemoteFileStatus::Unsupported(message) => Some(message),
+        RemoteFileStatus::Idle | RemoteFileStatus::Loaded => None,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn project_subtitle_for_test(project: &Project, services: &[SshService]) -> String {
+    project_subtitle(project, services)
+}
+
+#[cfg(test)]
+pub(crate) fn remote_file_status_label_for_test(status: &RemoteFileStatus) -> Option<&str> {
+    remote_file_status_label(status)
+}
+
+impl App {
+    fn ensure_project_terminals(&mut self, project_id: Uuid) -> &mut ProjectTerminals {
+        self.terminals
+            .entry(project_id)
+            .or_insert_with(ProjectTerminals::new)
+    }
+
+    fn set_remote_files_loading(&mut self, project_id: Uuid, path: &std::path::Path) {
+        self.ensure_project_terminals(project_id).remote_files = Some(RemoteFileState {
+            path: path.display().to_string(),
+            status: RemoteFileStatus::Loading,
+            entries: Vec::new(),
+        });
+    }
+
+    fn maybe_request_remote_files(&mut self, project_id: Uuid) -> Task<Message> {
+        let Some(project) = self.config.projects.iter().find(|project| project.id == project_id) else {
+            return Task::none();
+        };
+
+        if !matches!(project.connection, Connection::Ssh { .. }) {
+            return Task::none();
+        }
+
+        let should_request = self
+            .terminals
+            .get(&project_id)
+            .and_then(|state| state.remote_files.as_ref())
+            .is_none();
+
+        if should_request {
+            self.update(Message::RequestRemoteFiles(project_id))
+        } else {
+            Task::none()
+        }
     }
 }
 
