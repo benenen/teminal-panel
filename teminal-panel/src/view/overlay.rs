@@ -299,16 +299,17 @@ impl App {
 
         let modal = Modal::new(content.into())
             .with_title("SSH Service Settings")
-            .width(Length::Fixed(520.0))
+            .width(Length::Fixed(720.0))
             .into_element();
 
         container(modal)
             .width(Length::Fill)
-            .height(Length::Shrink)
+            .height(Length::Fill)
             .style(|_| {
                 container::Style::default().background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5))
             })
             .center_x(Length::Fill)
+            .center_y(Length::Fill)
             .into()
     }
 }
