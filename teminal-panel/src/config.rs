@@ -1,4 +1,4 @@
-use crate::project::Project;
+use crate::project::{Project, SshService};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -6,6 +6,8 @@ use std::path::PathBuf;
 pub struct AppConfig {
     #[serde(default)]
     pub projects: Vec<Project>,
+    #[serde(default)]
+    pub ssh_services: Vec<SshService>,
 }
 
 impl AppConfig {
@@ -35,7 +37,10 @@ impl AppConfig {
             compat.projects
         };
 
-        Self { projects }
+        Self {
+            projects,
+            ssh_services: compat.ssh_services,
+        }
     }
 
     pub fn save(&self) {
@@ -55,6 +60,8 @@ struct AppConfigCompat {
     projects: Vec<Project>,
     #[serde(default)]
     agents: Vec<Project>,
+    #[serde(default)]
+    ssh_services: Vec<SshService>,
 }
 
 #[cfg(test)]

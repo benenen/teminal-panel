@@ -1,11 +1,25 @@
-use super::{panel_interaction_mode, App, Message, PanelInteractionMode};
+use super::{App, Message, OverlayState, SshAuthType};
+use super::view::terminal::{panel_interaction_mode, PanelInteractionMode};
 use crate::config::AppConfig;
+use crate::project::{panel::ProjectConnectionKind, Connection, SshAuth, SshService};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use uuid::Uuid;
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn sample_ssh_service() -> SshService {
+    SshService {
+        id: Uuid::new_v4(),
+        name: "Prod".into(),
+        host: "example.com".into(),
+        port: 22,
+        user: "deploy".into(),
+        auth: SshAuth::Agent,
+    }
 }
 
 fn test_app() -> App {
@@ -16,6 +30,9 @@ fn test_app() -> App {
         expanded_projects: std::collections::HashSet::new(),
         editing_terminal: None,
         add_form: Default::default(),
+        overlay: None,
+        ssh_service_form: Default::default(),
+        editing_ssh_service: None,
         terminals: std::collections::HashMap::new(),
         next_terminal_id: 1,
     }
@@ -304,4 +321,156 @@ fn project_folder_selected_none_preserves_existing_selection() {
         app.add_form.selected_dir,
         Some(std::path::PathBuf::from("/tmp/demo"))
     );
+}
+
+#[test]
+fn toggle_settings_menu_updates_overlay_state() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ToggleSettingsMenu);
+    assert_eq!(app.overlay, Some(OverlayState::SettingsMenu));
+
+    let _ = app.update(Message::ToggleSettingsMenu);
+    assert_eq!(app.overlay, None);
+}
+
+#[test]
+fn show_ssh_services_opens_modal_and_resets_form() {
+    let mut app = test_app();
+    app.ssh_service_form.name = "stale".into();
+
+    let _ = app.update(Message::ShowSshServices);
+
+    assert_eq!(app.overlay, Some(OverlayState::SshServices));
+    assert!(app.ssh_service_form.name.is_empty());
+    assert_eq!(app.editing_ssh_service, None);
+}
+
+#[test]
+fn submit_ssh_service_form_adds_service_and_persists() {
+    with_temp_config_dir(|_| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::ShowSshServices);
+        let _ = app.update(Message::SshServiceNameChanged("Prod".into()));
+        let _ = app.update(Message::SshServiceHostChanged("example.com".into()));
+        let _ = app.update(Message::SshServicePortChanged("22".into()));
+        let _ = app.update(Message::SshServiceUserChanged("deploy".into()));
+        let _ = app.update(Message::SshServiceAuthTypeChanged(SshAuthType::Agent));
+        let _ = app.update(Message::SubmitSshServiceForm);
+
+        assert_eq!(app.config.ssh_services.len(), 1);
+        assert_eq!(app.config.ssh_services[0].name, "Prod");
+        assert_eq!(AppConfig::load().ssh_services.len(), 1);
+    });
+}
+
+#[test]
+fn edit_ssh_service_updates_existing_entry() {
+    with_temp_config_dir(|_| {
+        let mut app = test_app();
+        let service = sample_ssh_service();
+        let service_id = service.id;
+        app.config.ssh_services.push(service);
+
+        let _ = app.update(Message::EditSshService(service_id));
+        let _ = app.update(Message::SshServiceHostChanged("new.example.com".into()));
+        let _ = app.update(Message::SubmitSshServiceForm);
+
+        assert_eq!(app.config.ssh_services[0].host, "new.example.com");
+    });
+}
+
+#[test]
+fn delete_referenced_ssh_service_is_blocked() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+        let service = sample_ssh_service();
+        let service_id = service.id;
+        app.config.ssh_services.push(service);
+        app.config.projects.push(crate::project::Project::new_ssh(
+            "Remote".into(),
+            workspace_dir.clone(),
+            service_id,
+        ));
+
+        let _ = app.update(Message::DeleteSshService(service_id));
+
+        assert_eq!(app.config.ssh_services.len(), 1);
+    });
+}
+
+#[test]
+fn submit_add_form_creates_ssh_project_when_service_selected() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+        let service = sample_ssh_service();
+        let service_id = service.id;
+        app.config.ssh_services.push(service);
+
+        let _ = app.update(Message::ShowAddProjectForm);
+        let _ = app.update(Message::FormNameChanged("Remote project".into()));
+        let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+        let _ = app.update(Message::FormSshServiceSelected(service_id));
+        let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
+        let _ = app.update(Message::SubmitAddProjectForm);
+
+        assert_eq!(app.config.projects.len(), 1);
+        assert!(matches!(
+            app.config.projects[0].connection,
+            Connection::Ssh { service_id: id } if id == service_id
+        ));
+        assert_eq!(AppConfig::load().projects.len(), 1);
+    });
+}
+
+#[test]
+fn submit_add_form_with_ssh_requires_service_selection() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::ShowAddProjectForm);
+        let _ = app.update(Message::FormNameChanged("Remote project".into()));
+        let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+        let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
+        let _ = app.update(Message::SubmitAddProjectForm);
+
+        assert!(app.config.projects.is_empty());
+        assert!(app.add_form.visible);
+    });
+}
+
+#[test]
+fn ssh_password_auth_requires_password() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::SshServiceNameChanged("Prod".into()));
+    let _ = app.update(Message::SshServiceHostChanged("example.com".into()));
+    let _ = app.update(Message::SshServicePortChanged("22".into()));
+    let _ = app.update(Message::SshServiceUserChanged("deploy".into()));
+    let _ = app.update(Message::SshServiceAuthTypeChanged(SshAuthType::Password));
+    let _ = app.update(Message::SubmitSshServiceForm);
+
+    assert!(app.config.ssh_services.is_empty());
+}
+
+#[test]
+fn ssh_key_auth_stores_key_path_and_passphrase() {
+    with_temp_config_dir(|_| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::SshServiceNameChanged("Prod".into()));
+        let _ = app.update(Message::SshServiceHostChanged("example.com".into()));
+        let _ = app.update(Message::SshServicePortChanged("22".into()));
+        let _ = app.update(Message::SshServiceUserChanged("deploy".into()));
+        let _ = app.update(Message::SshServiceAuthTypeChanged(SshAuthType::Key));
+        let _ = app.update(Message::SshServiceKeyPathChanged("~/.ssh/id_rsa".into()));
+        let _ = app.update(Message::SshServiceKeyPassphraseChanged("secret".into()));
+        let _ = app.update(Message::SubmitSshServiceForm);
+
+        assert!(matches!(
+            app.config.ssh_services[0].auth,
+            SshAuth::Key { .. }
+        ));
+    });
 }

@@ -15,12 +15,17 @@ pub struct Project {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Connection {
     Local,
-    Ssh {
-        host: String,
-        port: u16,
-        user: String,
-        auth: SshAuth,
-    },
+    Ssh { service_id: Uuid },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshService {
+    pub id: Uuid,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: SshAuth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +48,16 @@ impl Project {
             connection: Connection::Local,
             working_dir,
             is_git_repo,
+        }
+    }
+
+    pub fn new_ssh(name: String, working_dir: PathBuf, service_id: Uuid) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            connection: Connection::Ssh { service_id },
+            working_dir,
+            is_git_repo: false,
         }
     }
 }

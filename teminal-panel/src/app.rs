@@ -1,14 +1,16 @@
 use crate::config::AppConfig;
-use crate::project::{panel::AddProjectForm, Project};
+use crate::project::{
+    panel::{AddProjectForm, ProjectConnectionKind},
+    Connection, Project, SshAuth, SshService,
+};
 use crate::terminal::{settings_for_working_dir, DisplayMode, ProjectTerminals, TerminalState};
-use iced::widget::{button, column, container, mouse_area, row, scrollable, stack, text, text_input};
-use iced::{Element, Length, Padding, Task, Theme};
-use iced_fonts::bootstrap;
+use iced::{Element, Task, Theme};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use teminal_ui::components::{Button, TextInput, TruncatedTooltipText};
-use teminal_ui::containers::Modal;
 use uuid::Uuid;
+
+#[path = "view/mod.rs"]
+mod view;
 
 pub struct App {
     pub config: AppConfig,
@@ -17,6 +19,9 @@ pub struct App {
     pub expanded_projects: HashSet<Uuid>,
     pub editing_terminal: Option<(Uuid, usize)>,
     pub add_form: AddProjectForm,
+    pub overlay: Option<OverlayState>,
+    pub ssh_service_form: SshServiceForm,
+    pub editing_ssh_service: Option<Uuid>,
     pub terminals: HashMap<Uuid, ProjectTerminals>,
     pub next_terminal_id: u64,
 }
@@ -31,9 +36,27 @@ pub enum Message {
     ShowAddProjectForm,
     HideAddProjectForm,
     FormNameChanged(String),
+    FormConnectionKindChanged(ProjectConnectionKind),
+    FormSshServiceSelected(Uuid),
     ChooseProjectFolder,
     ProjectFolderSelected(Option<PathBuf>),
     SubmitAddProjectForm,
+    ToggleSettingsMenu,
+    ShowSshServices,
+    HideOverlay,
+    ShowAddSshServiceForm,
+    EditSshService(Uuid),
+    DeleteSshService(Uuid),
+    SshServiceNameChanged(String),
+    SshServiceHostChanged(String),
+    SshServicePortChanged(String),
+    SshServiceUserChanged(String),
+    SshServiceAuthTypeChanged(SshAuthType),
+    SshServicePasswordChanged(String),
+    SshServiceKeyPathChanged(String),
+    SshServiceKeyPassphraseChanged(String),
+    SubmitSshServiceForm,
+    CancelSshServiceForm,
     OpenTerminal(Uuid),
     ToggleProjectExpanded(Uuid),
     SelectTab(Uuid, usize),
@@ -46,16 +69,42 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PanelInteractionMode {
-    Direct,
-    ClickToActivate,
+pub enum OverlayState {
+    SettingsMenu,
+    SshServices,
 }
 
-fn panel_interaction_mode(is_active: bool) -> PanelInteractionMode {
-    if is_active {
-        PanelInteractionMode::Direct
-    } else {
-        PanelInteractionMode::ClickToActivate
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshAuthType {
+    Password,
+    Key,
+    Agent,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshServiceForm {
+    pub name: String,
+    pub host: String,
+    pub port: String,
+    pub user: String,
+    pub auth_type: SshAuthType,
+    pub password: String,
+    pub key_path: String,
+    pub key_passphrase: String,
+}
+
+impl Default for SshServiceForm {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            host: String::new(),
+            port: "22".into(),
+            user: String::new(),
+            auth_type: SshAuthType::Agent,
+            password: String::new(),
+            key_path: String::new(),
+            key_passphrase: String::new(),
+        }
     }
 }
 
@@ -69,6 +118,9 @@ impl App {
                 expanded_projects: HashSet::new(),
                 editing_terminal: None,
                 add_form: Default::default(),
+                overlay: None,
+                ssh_service_form: Default::default(),
+                editing_ssh_service: None,
                 terminals: HashMap::new(),
                 next_terminal_id: 1,
             },
@@ -103,6 +155,7 @@ impl App {
                 self.hovered_project = id;
             }
             Message::ShowAddProjectForm => {
+                self.overlay = None;
                 self.add_form.visible = true;
             }
             Message::HideAddProjectForm => {
@@ -110,6 +163,15 @@ impl App {
             }
             Message::FormNameChanged(value) => {
                 self.add_form.name = value;
+            }
+            Message::FormConnectionKindChanged(kind) => {
+                self.add_form.connection_kind = kind;
+                if kind == ProjectConnectionKind::Local {
+                    self.add_form.ssh_service_id = None;
+                }
+            }
+            Message::FormSshServiceSelected(service_id) => {
+                self.add_form.ssh_service_id = Some(service_id);
             }
             Message::ChooseProjectFolder => {
                 return Task::perform(
@@ -129,10 +191,117 @@ impl App {
             }
             Message::SubmitAddProjectForm => {
                 if let Some(path) = self.add_form.selected_dir.clone() {
-                    if self.add_local_project(self.add_form.name.clone(), path) {
+                    let added = match self.add_form.connection_kind {
+                        ProjectConnectionKind::Local => {
+                            self.add_local_project(self.add_form.name.clone(), path)
+                        }
+                        ProjectConnectionKind::Ssh => self.add_ssh_project(
+                            self.add_form.name.clone(),
+                            path,
+                            self.add_form.ssh_service_id,
+                        ),
+                    };
+
+                    if added {
                         self.add_form = Default::default();
                     }
                 }
+            }
+            Message::ToggleSettingsMenu => {
+                self.add_form.visible = false;
+                self.overlay = if self.overlay == Some(OverlayState::SettingsMenu) {
+                    None
+                } else {
+                    Some(OverlayState::SettingsMenu)
+                };
+            }
+            Message::ShowSshServices => {
+                self.add_form.visible = false;
+                self.overlay = Some(OverlayState::SshServices);
+                self.editing_ssh_service = None;
+                self.ssh_service_form = Default::default();
+            }
+            Message::HideOverlay => {
+                self.overlay = None;
+                self.editing_ssh_service = None;
+                self.ssh_service_form = Default::default();
+            }
+            Message::ShowAddSshServiceForm => {
+                self.editing_ssh_service = None;
+                self.ssh_service_form = Default::default();
+            }
+            Message::EditSshService(service_id) => {
+                if let Some(service) = self.config.ssh_services.iter().find(|s| s.id == service_id) {
+                    self.editing_ssh_service = Some(service_id);
+                    self.ssh_service_form = SshServiceForm::from_service(service);
+                }
+            }
+            Message::DeleteSshService(service_id) => {
+                if self
+                    .config
+                    .projects
+                    .iter()
+                    .any(|project| matches!(project.connection, Connection::Ssh { service_id: id } if id == service_id))
+                {
+                    return Task::none();
+                }
+
+                self.config.ssh_services.retain(|service| service.id != service_id);
+                if self.editing_ssh_service == Some(service_id) {
+                    self.editing_ssh_service = None;
+                    self.ssh_service_form = Default::default();
+                }
+                self.config.save();
+            }
+            Message::SshServiceNameChanged(value) => {
+                self.ssh_service_form.name = value;
+            }
+            Message::SshServiceHostChanged(value) => {
+                self.ssh_service_form.host = value;
+            }
+            Message::SshServicePortChanged(value) => {
+                self.ssh_service_form.port = value;
+            }
+            Message::SshServiceUserChanged(value) => {
+                self.ssh_service_form.user = value;
+            }
+            Message::SshServiceAuthTypeChanged(value) => {
+                self.ssh_service_form.auth_type = value;
+            }
+            Message::SshServicePasswordChanged(value) => {
+                self.ssh_service_form.password = value;
+            }
+            Message::SshServiceKeyPathChanged(value) => {
+                self.ssh_service_form.key_path = value;
+            }
+            Message::SshServiceKeyPassphraseChanged(value) => {
+                self.ssh_service_form.key_passphrase = value;
+            }
+            Message::SubmitSshServiceForm => {
+                if let Some(service) = self
+                    .ssh_service_form
+                    .to_service(self.editing_ssh_service.unwrap_or_else(Uuid::new_v4))
+                {
+                    if let Some(editing_id) = self.editing_ssh_service {
+                        if let Some(existing) = self
+                            .config
+                            .ssh_services
+                            .iter_mut()
+                            .find(|existing| existing.id == editing_id)
+                        {
+                            *existing = service;
+                        }
+                    } else {
+                        self.config.ssh_services.push(service);
+                    }
+                    self.config.save();
+                    self.editing_ssh_service = None;
+                    self.ssh_service_form = Default::default();
+                }
+            }
+            Message::CancelSshServiceForm => {
+                self.editing_ssh_service = None;
+                self.ssh_service_form = Default::default();
             }
             Message::OpenTerminal(project_id) => {
                 if let Some(project) = self.config.projects.iter().find(|p| p.id == project_id) {
@@ -267,527 +436,50 @@ impl App {
         true
     }
 
+    fn add_ssh_project(
+        &mut self,
+        name: String,
+        working_dir: PathBuf,
+        service_id: Option<Uuid>,
+    ) -> bool {
+        let name = name.trim().to_string();
+
+        let Some(service_id) = service_id else {
+            return false;
+        };
+
+        if name.is_empty() || !working_dir.is_dir() {
+            return false;
+        }
+
+        if !self.config.ssh_services.iter().any(|service| service.id == service_id) {
+            return false;
+        }
+
+        self.config
+            .projects
+            .push(Project::new_ssh(name, working_dir, service_id));
+        self.config.save();
+        true
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
-        let main_content = row![self.view_project_panel(), self.view_terminal_area()]
+        let main_content = iced::widget::row![self.view_project_panel(), self.view_terminal_area()]
             .spacing(0)
             .padding(0);
 
         if self.add_form.visible {
-            let selected_dir = self
-                .add_form
-                .selected_dir
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "No folder selected".into());
-
-            let form_content = column![
-                TextInput::new("Project Name", &self.add_form.name)
-                    .on_input(Message::FormNameChanged)
-                    .on_submit(Message::SubmitAddProjectForm)
-                    .into_element(),
-                row![
-                    text(selected_dir).size(12),
-                    button(bootstrap::folder_plus().size(14))
-                        .on_press(Message::ChooseProjectFolder)
-                        .padding([4, 8])
-                        .style(button::secondary),
-                ]
-                .spacing(8)
-                .align_y(iced::alignment::Vertical::Center),
-                row![
-                    Button::new("Add")
-                        .width(Length::Fill)
-                        .on_press(Message::SubmitAddProjectForm)
-                        .into_element(),
-                    Button::new("Cancel")
-                        .width(Length::Fill)
-                        .on_press(Message::HideAddProjectForm)
-                        .into_element(),
-                ]
-                .spacing(8),
-            ]
-            .spacing(16);
-
-            let modal = Modal::new(form_content.into())
-                .with_title("Add Project")
-                .into_element();
-
-            let overlay = container(modal)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(|_| {
-                    container::Style::default()
-                        .background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5))
-                })
-                .center_x(Length::Fill)
-                .center_y(Length::Fill);
-
-            stack![main_content, overlay,]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+            let overlay = self.view_add_project_overlay();
+            iced::widget::column![main_content, overlay].into()
+        } else if let Some(overlay) = self.overlay {
+            let overlay_view = match overlay {
+                OverlayState::SettingsMenu => self.view_settings_menu_overlay(),
+                OverlayState::SshServices => self.view_ssh_services_overlay(),
+            };
+            iced::widget::column![main_content, overlay_view].into()
         } else {
             main_content.into()
         }
-    }
-
-    fn view_project_panel(&self) -> Element<'_, Message> {
-        let project_list = self.config.projects.iter().fold(column![], |col, project| {
-            let is_selected = self.selected_project == Some(project.id);
-            let is_expanded = self.expanded_projects.contains(&project.id);
-
-            let chevron = if is_expanded {
-                bootstrap::chevron_down().size(10)
-            } else {
-                bootstrap::chevron_right().size(10)
-            };
-
-            let show_close = is_selected || self.hovered_project == Some(project.id);
-            let row_bg = if is_selected {
-                Some(iced::Color::from_rgb(0.18, 0.24, 0.36))
-            } else {
-                None
-            };
-            let row_border = if is_selected {
-                iced::Color::from_rgb(0.3, 0.5, 0.9)
-            } else {
-                iced::Color::TRANSPARENT
-            };
-            let label_color = if is_selected {
-                iced::Color::WHITE
-            } else {
-                iced::Color::from_rgb(0.85, 0.85, 0.85)
-            };
-
-            let project_button = button(
-                row![bootstrap::folder().size(14), text(&project.name).size(13).color(label_color),]
-                    .spacing(6)
-                    .align_y(iced::alignment::Vertical::Center),
-            )
-            .width(Length::Fill)
-            .style(button::text)
-            .padding([6, 8])
-            .on_press(Message::SelectProject(project.id));
-
-            let chevron_btn = button(chevron)
-                .on_press(Message::ToggleProjectExpanded(project.id))
-                .padding([4, 4])
-                .style(button::text);
-
-            let close_btn: Element<'_, Message> = if show_close {
-                button(bootstrap::x_lg().size(10))
-                    .on_press(Message::RemoveProject(project.id))
-                    .padding([4, 4])
-                    .style(button::text)
-                    .into()
-            } else {
-                container(text(" ").size(10)).padding([4, 4]).into()
-            };
-
-            let row_content = row![chevron_btn, project_button, close_btn,]
-                .spacing(2)
-                .align_y(iced::alignment::Vertical::Center);
-
-            let row_container = container(row_content)
-                .width(Length::Fill)
-                .style(move |_| {
-                    let mut style = container::Style::default().border(iced::Border {
-                        color: row_border,
-                        width: if row_bg.is_some() { 1.0 } else { 0.0 },
-                        radius: 6.into(),
-                    });
-                    if let Some(bg) = row_bg {
-                        style = style.background(bg);
-                    }
-                    style
-                })
-                .padding([0, 2]);
-
-            let name_row = mouse_area(row_container)
-                .on_enter(Message::HoverProject(Some(project.id)))
-                .on_exit(Message::HoverProject(None));
-
-            let mut project_col = column![name_row].spacing(0);
-
-            if is_expanded {
-                let path_row = container(
-                    text(project.working_dir.display().to_string())
-                        .size(10)
-                        .color(iced::Color::from_rgb(0.45, 0.45, 0.45)),
-                )
-                .padding(Padding {
-                    top: 2.0,
-                    right: 8.0,
-                    bottom: 2.0,
-                    left: 28.0,
-                });
-
-                project_col = project_col.push(path_row);
-
-                if let Some(project_terms) = self.terminals.get(&project.id) {
-                    for (i, ts) in project_terms.terminals.iter().enumerate() {
-                        let is_active_tab = is_selected && i == project_terms.active_index;
-                        let is_editing = self.editing_terminal == Some((project.id, i));
-                        let display_name = ts.title.as_deref().unwrap_or(&ts.name);
-
-                        let name_field: Element<'_, Message> = if is_editing {
-                            text_input("Terminal name", &ts.name)
-                                .on_input(move |value| Message::RenameTerminal(project.id, i, value))
-                                .on_submit(Message::FinishRenameTerminal)
-                                .padding([2, 6])
-                                .size(11)
-                                .into()
-                        } else {
-                            button(
-                                TruncatedTooltipText::new(display_name)
-                                    .max_chars(22)
-                                    .size(11)
-                                    .width(Length::Fill)
-                                    .into_element(),
-                            )
-                            .on_press(Message::SelectTab(project.id, i))
-                            .style(button::text)
-                            .padding(0)
-                            .width(Length::Fill)
-                            .into()
-                        };
-
-                        let term_row = row![
-                            bootstrap::terminal().size(11),
-                            name_field,
-                            button(bootstrap::pencil().size(9))
-                                .on_press(Message::StartRenameTerminal(project.id, i))
-                                .padding([1, 3])
-                                .style(button::text),
-                            button(bootstrap::x_lg().size(9))
-                                .on_press(Message::CloseTab(project.id, i))
-                                .padding([1, 3])
-                                .style(button::text),
-                        ]
-                        .spacing(6)
-                        .align_y(iced::alignment::Vertical::Center);
-
-                        project_col = project_col.push(
-                            container(term_row)
-                                .width(Length::Fill)
-                                .padding(Padding {
-                                    top: 4.0,
-                                    right: 8.0,
-                                    bottom: 4.0,
-                                    left: 28.0,
-                                })
-                                .style(move |_| {
-                                    if is_active_tab {
-                                        container::Style::default()
-                                            .background(iced::Color::from_rgb(0.18, 0.24, 0.36))
-                                    } else {
-                                        container::Style::default()
-                                    }
-                                }),
-                        );
-                    }
-                }
-
-                // Add terminal button inside expanded project
-                let add_term_row =
-                    row![bootstrap::plus_lg().size(11), text("New Terminal").size(11),]
-                        .spacing(4)
-                        .align_y(iced::alignment::Vertical::Center);
-
-                project_col = project_col.push(
-                    button(add_term_row)
-                        .width(Length::Fill)
-                        .padding(Padding {
-                            top: 4.0,
-                            right: 8.0,
-                            bottom: 4.0,
-                            left: 28.0,
-                        })
-                        .style(button::text)
-                        .on_press(Message::OpenTerminal(project.id)),
-                );
-            }
-
-            col.push(project_col)
-        });
-
-        let header = row![
-            text("Projects")
-                .size(13)
-                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
-                .width(Length::Fill),
-            button(bootstrap::plus_lg().size(14))
-                .on_press(Message::ShowAddProjectForm)
-                .padding([4, 6])
-                .style(button::text),
-        ]
-        .align_y(iced::alignment::Vertical::Center);
-
-        container(
-            column![
-                container(header).padding([8, 10]),
-                scrollable(project_list.spacing(2).padding([0, 6])).height(Length::Fill),
-            ]
-            .spacing(0),
-        )
-        .width(Length::Fixed(220.0))
-        .height(Length::Fill)
-        .style(|_| {
-            container::Style::default()
-                .background(iced::Color::from_rgb(0.1, 0.1, 0.1))
-                .border(iced::Border {
-                    color: iced::Color::from_rgb(0.18, 0.18, 0.18),
-                    width: 1.0,
-                    radius: 0.into(),
-                })
-        })
-        .into()
-    }
-
-    fn view_terminal_area(&self) -> Element<'_, Message> {
-        let content = if let Some(selected_id) = self.selected_project {
-            if let Some(project) = self.config.projects.iter().find(|p| p.id == selected_id) {
-                if let Some(project_terms) = self.terminals.get(&selected_id) {
-                    self.view_terminals(selected_id, &project.name, project_terms)
-                } else {
-                    self.view_empty_project(selected_id, &project.name)
-                }
-            } else {
-                column![text("Project not found").size(14)].into()
-            }
-        } else {
-            container(
-                column![
-                    bootstrap::terminal_fill()
-                        .size(48)
-                        .color(iced::Color::from_rgb(0.25, 0.25, 0.25)),
-                    text("Select a project")
-                        .size(14)
-                        .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
-                ]
-                .spacing(12)
-                .align_x(iced::alignment::Horizontal::Center),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into()
-        };
-
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| {
-                container::Style::default().background(iced::Color::from_rgb(0.08, 0.08, 0.08))
-            })
-            .into()
-    }
-
-    fn view_empty_project<'a>(&self, project_id: Uuid, name: &str) -> Element<'a, Message> {
-        container(
-            column![
-                bootstrap::terminal_plus()
-                    .size(48)
-                    .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
-                text(name.to_string()).size(16),
-                button(
-                    row![
-                        bootstrap::terminal_plus().size(14),
-                        text("Open Terminal").size(13),
-                    ]
-                    .spacing(6)
-                    .align_y(iced::alignment::Vertical::Center),
-                )
-                .on_press(Message::OpenTerminal(project_id))
-                .padding([8, 16])
-                .style(button::primary),
-            ]
-            .spacing(12)
-            .align_x(iced::alignment::Horizontal::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
-    }
-
-    fn view_terminals<'a>(
-        &'a self,
-        project_id: Uuid,
-        _project_name: &str,
-        project_terms: &'a ProjectTerminals,
-    ) -> Element<'a, Message> {
-        let tab_bar = self.view_tab_bar(project_id, project_terms);
-
-        let terminal_content: Element<'_, Message> = match project_terms.display_mode {
-            DisplayMode::Tabs => {
-                if let Some(ts) = project_terms.active_terminal() {
-                    iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal)
-                } else {
-                    text("No terminal").into()
-                }
-            }
-            DisplayMode::Panel => {
-                let panels = project_terms
-                    .terminals
-                    .iter()
-                    .enumerate()
-                    .fold(row![], |r, (i, ts)| {
-                        let is_active = i == project_terms.active_index;
-                        let interaction_mode = panel_interaction_mode(is_active);
-                        let border_color = if is_active {
-                            iced::Color::from_rgb(0.3, 0.5, 0.9)
-                        } else {
-                            iced::Color::from_rgb(0.18, 0.18, 0.18)
-                        };
-                        let dim_overlay = if is_active {
-                            iced::Color::from_rgba(0.0, 0.0, 0.0, 0.0)
-                        } else {
-                            iced::Color::from_rgba(0.0, 0.0, 0.0, 0.38)
-                        };
-
-                        let term_view = iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal);
-                        let overlay: Element<'_, Message> = match interaction_mode {
-                            PanelInteractionMode::Direct => container(text(""))
-                                .width(Length::Fill)
-                                .height(Length::Fill)
-                                .style(move |_| {
-                                    container::Style::default().background(dim_overlay)
-                                })
-                                .into(),
-                            PanelInteractionMode::ClickToActivate => mouse_area(
-                                container(text(""))
-                                    .width(Length::Fill)
-                                    .height(Length::Fill)
-                                    .style(move |_| {
-                                        container::Style::default().background(dim_overlay)
-                                    }),
-                            )
-                            .on_press(Message::SelectTab(project_id, i))
-                            .into(),
-                        };
-                        let panel = stack![
-                            container(term_view)
-                                .width(Length::Fill)
-                                .height(Length::Fill),
-                            overlay,
-                        ];
-
-                        r.push(
-                            container(panel)
-                                .width(Length::Fill)
-                                .height(Length::Fill)
-                                .style(move |_| {
-                                    container::Style::default()
-                                        .background(iced::Color::from_rgb(0.08, 0.08, 0.08))
-                                        .border(iced::Border {
-                                            color: border_color,
-                                            width: if is_active { 2.0 } else { 1.0 },
-                                            radius: 0.into(),
-                                        })
-                                })
-                                .padding(0)
-                        )
-                    })
-                    .spacing(6);
-                row!(panels).into()
-            }
-        };
-
-        column![
-            tab_bar,
-            container(terminal_content)
-                .width(Length::Fill)
-                .height(Length::Fill),
-        ]
-        .spacing(0)
-        .into()
-    }
-
-    fn view_tab_bar<'a>(
-        &self,
-        project_id: Uuid,
-        project_terms: &'a ProjectTerminals,
-    ) -> Element<'a, Message> {
-        let mut tabs = row![].spacing(1);
-
-        for (i, ts) in project_terms.terminals.iter().enumerate() {
-            let is_active = i == project_terms.active_index;
-            let display_name = ts.title.as_deref().unwrap_or(&ts.name);
-
-            let tab_label = row![
-                bootstrap::terminal().size(12),
-                button(
-                    TruncatedTooltipText::new(display_name)
-                        .max_chars(28)
-                        .size(12)
-                        .into_element(),
-                )
-                .on_press(Message::SelectTab(project_id, i))
-                .style(button::text)
-                .padding(0),
-                button(bootstrap::x_lg().size(10))
-                    .on_press(Message::CloseTab(project_id, i))
-                    .padding([2, 4])
-                    .style(button::text),
-            ]
-            .spacing(6)
-            .align_y(iced::alignment::Vertical::Center);
-
-            tabs = tabs.push(
-                container(tab_label)
-                    .padding([6, 12])
-                    .style(move |_| {
-                        if is_active {
-                            container::Style::default()
-                                .background(iced::Color::from_rgb(0.18, 0.24, 0.36))
-                        } else {
-                            container::Style::default()
-                                .background(iced::Color::from_rgb(0.16, 0.16, 0.16))
-                        }
-                    }),
-            );
-        }
-
-        let add_tab = button(bootstrap::plus_lg().size(12))
-            .on_press(Message::OpenTerminal(project_id))
-            .padding([6, 8])
-            .style(button::text);
-
-        let mode_icon = match project_terms.display_mode {
-            DisplayMode::Tabs => bootstrap::layout_split().size(14),
-            DisplayMode::Panel => bootstrap::layout_text_window().size(14),
-        };
-        let mode_btn = button(mode_icon)
-            .on_press(Message::ToggleDisplayMode(project_id))
-            .padding([6, 8])
-            .style(button::text);
-
-        container(
-            row![
-                scrollable(tabs).direction(scrollable::Direction::Horizontal(
-                    scrollable::Scrollbar::default(),
-                )),
-                add_tab,
-                mode_btn,
-            ]
-            .spacing(4)
-            .align_y(iced::alignment::Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding([2, 4])
-        .style(|_| {
-            container::Style::default()
-                .background(iced::Color::from_rgb(0.12, 0.12, 0.12))
-                .border(iced::Border {
-                    color: iced::Color::from_rgb(0.18, 0.18, 0.18),
-                    width: 1.0,
-                    radius: 0.into(),
-                })
-        })
-        .into()
     }
 
     pub fn theme(&self) -> Theme {
@@ -801,6 +493,85 @@ impl App {
                 .flat_map(|pt| pt.terminals.iter())
                 .map(|ts| ts.terminal.subscription().map(Message::Terminal)),
         )
+    }
+}
+
+impl SshServiceForm {
+    fn from_service(service: &SshService) -> Self {
+        let (auth_type, password, key_path, key_passphrase) = match &service.auth {
+            SshAuth::Password(password) => (
+                SshAuthType::Password,
+                password.clone(),
+                String::new(),
+                String::new(),
+            ),
+            SshAuth::Key { path, passphrase } => (
+                SshAuthType::Key,
+                String::new(),
+                path.display().to_string(),
+                passphrase.clone().unwrap_or_default(),
+            ),
+            SshAuth::Agent => (
+                SshAuthType::Agent,
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
+
+        Self {
+            name: service.name.clone(),
+            host: service.host.clone(),
+            port: service.port.to_string(),
+            user: service.user.clone(),
+            auth_type,
+            password,
+            key_path,
+            key_passphrase,
+        }
+    }
+
+    fn to_service(&self, id: Uuid) -> Option<SshService> {
+        let name = self.name.trim();
+        let host = self.host.trim();
+        let user = self.user.trim();
+        let port = self.port.trim().parse::<u16>().ok()?;
+
+        if name.is_empty() || host.is_empty() || user.is_empty() {
+            return None;
+        }
+
+        let auth = match self.auth_type {
+            SshAuthType::Agent => SshAuth::Agent,
+            SshAuthType::Password => {
+                if self.password.is_empty() {
+                    return None;
+                }
+                SshAuth::Password(self.password.clone())
+            }
+            SshAuthType::Key => {
+                if self.key_path.trim().is_empty() {
+                    return None;
+                }
+                SshAuth::Key {
+                    path: PathBuf::from(self.key_path.trim()),
+                    passphrase: if self.key_passphrase.is_empty() {
+                        None
+                    } else {
+                        Some(self.key_passphrase.clone())
+                    },
+                }
+            }
+        };
+
+        Some(SshService {
+            id,
+            name: name.into(),
+            host: host.into(),
+            port,
+            user: user.into(),
+            auth,
+        })
     }
 }
 
