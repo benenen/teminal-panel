@@ -79,6 +79,7 @@ pub enum Message {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayState {
     SettingsMenu,
+    AddProject,
     SshServices,
 }
 
@@ -164,11 +165,14 @@ impl App {
                 self.hovered_project = id;
             }
             Message::ShowAddProjectForm => {
-                self.overlay = None;
-                self.add_form.visible = true;
+                self.add_form = Default::default();
+                self.overlay = Some(OverlayState::AddProject);
             }
             Message::HideAddProjectForm => {
                 self.add_form = Default::default();
+                if self.overlay == Some(OverlayState::AddProject) {
+                    self.overlay = None;
+                }
             }
             Message::FormNameChanged(value) => {
                 self.add_form.name = value;
@@ -225,11 +229,12 @@ impl App {
 
                     if added {
                         self.add_form = Default::default();
+                        self.overlay = None;
                     }
                 }
             }
             Message::ToggleSettingsMenu => {
-                self.add_form.visible = false;
+                self.add_form = Default::default();
                 self.overlay = if self.overlay == Some(OverlayState::SettingsMenu) {
                     None
                 } else {
@@ -237,7 +242,7 @@ impl App {
                 };
             }
             Message::ShowSshServices => {
-                self.add_form.visible = false;
+                self.add_form = Default::default();
                 self.overlay = Some(OverlayState::SshServices);
                 self.editing_ssh_service = None;
                 self.ssh_service_form = Default::default();
@@ -581,12 +586,10 @@ impl App {
             .spacing(0)
             .padding(0);
 
-        if self.add_form.visible {
-            let overlay = self.view_add_project_overlay();
-            iced::widget::column![main_content, overlay].into()
-        } else if let Some(overlay) = self.overlay {
+        if let Some(overlay) = self.overlay {
             let overlay_view = match overlay {
                 OverlayState::SettingsMenu => self.view_settings_menu_overlay(),
+                OverlayState::AddProject => self.view_add_project_overlay(),
                 OverlayState::SshServices => self.view_ssh_services_overlay(),
             };
             iced::widget::column![main_content, overlay_view].into()

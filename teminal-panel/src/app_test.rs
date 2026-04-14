@@ -61,17 +61,17 @@ fn with_temp_config_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
 }
 
 #[test]
-fn show_and_hide_add_project_form_updates_visibility_and_resets_fields() {
+fn show_and_hide_add_project_form_updates_overlay_and_resets_fields() {
     let mut app = test_app();
 
     let _ = app.update(Message::ShowAddProjectForm);
-    assert!(app.add_form.visible);
+    assert_eq!(app.overlay, Some(OverlayState::AddProject));
 
     let _ = app.update(Message::FormNameChanged("Local agent".into()));
     assert_eq!(app.add_form.name, "Local agent");
 
     let _ = app.update(Message::HideAddProjectForm);
-    assert!(!app.add_form.visible);
+    assert_eq!(app.overlay, None);
     assert!(app.add_form.name.is_empty());
     assert_eq!(app.add_form.selected_dir, None);
 }
@@ -89,7 +89,7 @@ fn submit_add_form_adds_project_and_resets_form() {
         assert_eq!(app.config.projects.len(), 1);
         assert_eq!(app.config.projects[0].name, "Local agent");
         assert_eq!(app.config.projects[0].working_dir, workspace_dir.clone());
-        assert!(!app.add_form.visible);
+        assert_eq!(app.overlay, None);
         assert_eq!(app.add_form.selected_dir, None);
 
         let persisted = AppConfig::load();
@@ -111,7 +111,7 @@ fn submit_add_form_requires_valid_directory() {
         let _ = app.update(Message::SubmitAddProjectForm);
 
         assert!(app.config.projects.is_empty());
-        assert!(app.add_form.visible);
+        assert_eq!(app.overlay, Some(OverlayState::AddProject));
         assert!(AppConfig::load().projects.is_empty());
     });
 }
@@ -335,6 +335,18 @@ fn toggle_settings_menu_updates_overlay_state() {
 }
 
 #[test]
+fn showing_settings_menu_closes_add_project_overlay() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowAddProjectForm);
+    let _ = app.update(Message::FormNameChanged("stale".into()));
+    let _ = app.update(Message::ToggleSettingsMenu);
+
+    assert_eq!(app.overlay, Some(OverlayState::SettingsMenu));
+    assert!(app.add_form.name.is_empty());
+}
+
+#[test]
 fn show_ssh_services_opens_modal_and_resets_form() {
     let mut app = test_app();
     app.ssh_service_form.name = "stale".into();
@@ -502,7 +514,7 @@ fn submit_add_form_with_ssh_requires_service_selection() {
         let _ = app.update(Message::SubmitAddProjectForm);
 
         assert!(app.config.projects.is_empty());
-        assert!(app.add_form.visible);
+        assert_eq!(app.overlay, Some(OverlayState::AddProject));
     });
 }
 

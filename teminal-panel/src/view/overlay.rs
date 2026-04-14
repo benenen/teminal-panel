@@ -110,30 +110,25 @@ impl App {
 
         form_content = form_content.push(
             row![
-                Button::new("Add")
-                    .width(Length::Fill)
-                    .on_press(Message::SubmitAddProjectForm)
-                    .into_element(),
+                container(text("")).width(Length::Fill),
                 Button::new("Cancel")
-                    .width(Length::Fill)
+                    .width(Length::Fixed(120.0))
                     .on_press(Message::HideAddProjectForm)
                     .into_element(),
+                Button::new("Add")
+                    .width(Length::Fixed(120.0))
+                    .on_press(Message::SubmitAddProjectForm)
+                    .into_element(),
             ]
-            .spacing(8),
+            .spacing(8)
+            .align_y(iced::alignment::Vertical::Center)
+            .width(Length::Fill),
         );
 
-        let modal = Modal::new(form_content.into())
+        Modal::new(form_content.into())
             .with_title("Add Project")
-            .into_element();
-
-        container(modal)
-            .width(Length::Fill)
-            .height(Length::Shrink)
-            .style(|_| {
-                container::Style::default().background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5))
-            })
-            .center_x(Length::Fill)
-            .into()
+            .on_close(Message::HideAddProjectForm)
+            .into_element()
     }
 
     pub(crate) fn view_settings_menu_overlay(&self) -> Element<'_, Message> {
@@ -293,16 +288,19 @@ impl App {
 
         form = form.push(
             row![
-                Button::new(if self.editing_ssh_service.is_some() { "Save" } else { "Add" })
-                    .width(Length::Fill)
-                    .on_press(Message::SubmitSshServiceForm)
-                    .into_element(),
-                Button::new("Reset")
-                    .width(Length::Fill)
+                container(text("")).width(Length::Fill),
+                Button::new("Cancel")
+                    .width(Length::Fixed(120.0))
                     .on_press(Message::CancelSshServiceForm)
                     .into_element(),
+                Button::new(if self.editing_ssh_service.is_some() { "Save" } else { "Add" })
+                    .width(Length::Fixed(120.0))
+                    .on_press(Message::SubmitSshServiceForm)
+                    .into_element(),
             ]
-            .spacing(8),
+            .spacing(8)
+            .align_y(iced::alignment::Vertical::Center)
+            .width(Length::Fill),
         );
 
         let content = column![
@@ -312,10 +310,6 @@ impl App {
                     .on_press(Message::ShowAddSshServiceForm)
                     .padding([4, 6])
                     .style(button::text),
-                button(bootstrap::x_lg().size(12))
-                    .on_press(Message::HideOverlay)
-                    .padding([4, 6])
-                    .style(button::text),
             ]
             .align_y(iced::alignment::Vertical::Center),
             scrollable(services).height(Length::Fixed(180.0)),
@@ -323,19 +317,10 @@ impl App {
         ]
         .spacing(16);
 
-        let modal = Modal::new(content.into())
+        Modal::new(content.into())
             .with_title("SSH Service Settings")
             .width(Length::Fixed(720.0))
-            .into_element();
-
-        container(modal)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| {
-                container::Style::default().background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5))
-            })
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into()
+            .on_close(Message::HideOverlay)
+            .into_element()
     }
 }

@@ -14,5 +14,4 @@ pub struct AddProjectForm {
     pub selected_dir: Option<PathBuf>,
     pub connection_kind: ProjectConnectionKind,
     pub ssh_service_id: Option<Uuid>,
-    pub visible: bool,
 }
