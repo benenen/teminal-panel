@@ -249,18 +249,24 @@ impl App {
         ]
         .align_y(iced::alignment::Vertical::Center);
 
-        let footer_button = row![
-            button(bootstrap::gear().size(14))
-                .on_press(Message::ToggleSettingsMenu)
-                .padding([6, 8])
-                .style(button::text)
-        ]
-        .align_y(iced::alignment::Vertical::Center);
+        let footer_button = container(
+            row![
+                button(bootstrap::gear().size(14))
+                    .on_press(Message::ToggleSettingsMenu)
+                    .padding([6, 8])
+                    .style(button::text)
+            ]
+            .align_y(iced::alignment::Vertical::Center),
+        )
+        .width(Length::Fill)
+        .align_left(Length::Fill)
+        .align_y(iced::alignment::Vertical::Bottom);
 
         let footer: Element<'_, Message> = if self.settings_menu_open {
             let menu = ContextMenu::new(
                 column![
                     button(text("SSH Service Settings").size(12))
+                        .width(Length::Fill)
                         .on_press(Message::ShowSshServices)
                         .padding([6, 8])
                         .style(button::text),
@@ -280,7 +286,7 @@ impl App {
                         container(menu).padding(Padding {
                             top: 0.0,
                             right: 0.0,
-                            bottom: 44.0,
+                            bottom: 8.0,
                             left: 0.0,
                         }),
                         footer_button,
@@ -288,18 +294,26 @@ impl App {
                     .align_x(iced::alignment::Horizontal::Left)
                 )
                 .width(Length::Fill)
-                .height(Length::Shrink)
+                .height(Length::Fill)
+                .align_left(Length::Fill)
+                .align_bottom(Length::Fill)
             ]
             .into()
         } else {
             footer_button.into()
         };
 
+        let footer = container(footer)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_left(Length::Fill)
+            .align_bottom(Length::Fill);
+
         container(
             column![
                 container(header).padding([8, 10]),
                 scrollable(project_list.spacing(2).padding([0, 6])).height(Length::Fill),
-                container(footer).padding([8, 10]).height(Length::Fixed(84.0)),
+                container(footer).padding([8, 10]).height(Length::Fixed(96.0)),
             ]
             .spacing(0),
         )

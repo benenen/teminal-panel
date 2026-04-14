@@ -360,6 +360,29 @@ fn showing_ssh_services_closes_settings_menu_without_using_menu_overlay() {
 }
 
 #[test]
+fn hiding_settings_menu_closes_menu_without_touching_modal_overlay() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowAddProjectForm);
+    let _ = app.update(Message::ToggleSettingsMenu);
+    let _ = app.update(Message::HideSettingsMenu);
+
+    assert!(!app.settings_menu_open);
+    assert_eq!(app.overlay, Some(OverlayState::AddProject));
+}
+
+#[test]
+fn showing_add_project_keeps_settings_menu_closed() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ToggleSettingsMenu);
+    let _ = app.update(Message::ShowAddProjectForm);
+
+    assert!(!app.settings_menu_open);
+    assert_eq!(app.overlay, Some(OverlayState::AddProject));
+}
+
+#[test]
 fn show_ssh_services_opens_modal_and_resets_form() {
     let mut app = test_app();
     app.ssh_service_form.name = "stale".into();
