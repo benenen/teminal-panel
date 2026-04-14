@@ -405,6 +405,8 @@ impl App {
                         Connection::Ssh { .. } => crate::terminal::settings_for_local_shell(),
                     };
 
+                    let local_shell_flavor = crate::terminal::local_shell_flavor_for_settings(&settings);
+
                     match iced_term::Terminal::new(self.next_terminal_id, settings) {
                         Ok(mut terminal) => {
                             self.next_terminal_id += 1;
@@ -421,6 +423,7 @@ impl App {
                                         let command = crate::ssh::build_terminal_bootstrap_command(
                                             service,
                                             &project.working_dir,
+                                            local_shell_flavor,
                                         );
                                         let _ = terminal.handle(iced_term::Command::ProxyToBackend(
                                             iced_term::BackendCommand::Write(

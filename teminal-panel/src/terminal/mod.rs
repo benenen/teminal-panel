@@ -2,6 +2,29 @@ use iced::Font;
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalShellFlavor {
+    Posix,
+    Cmd,
+    PowerShell,
+}
+
+pub fn local_shell_flavor(program: &str) -> LocalShellFlavor {
+    let normalized = program.to_ascii_lowercase();
+
+    if normalized.contains("powershell") || normalized.contains("pwsh") {
+        LocalShellFlavor::PowerShell
+    } else if normalized.contains("cmd") {
+        LocalShellFlavor::Cmd
+    } else {
+        LocalShellFlavor::Posix
+    }
+}
+
+pub fn local_shell_flavor_for_settings(settings: &iced_term::settings::Settings) -> LocalShellFlavor {
+    local_shell_flavor(&settings.backend.program)
+}
+
 pub struct TerminalState {
     pub terminal: iced_term::Terminal,
     pub name: String,

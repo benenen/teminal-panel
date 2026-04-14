@@ -1,5 +1,5 @@
 use crate::project::{SshAuth, SshService};
-use crate::terminal::RemoteFileEntry;
+use crate::terminal::{LocalShellFlavor, RemoteFileEntry};
 use std::path::Path;
 use std::process::Command;
 
@@ -8,26 +8,64 @@ pub enum RemoteListCommandError {
     PasswordAuthUnsupported,
 }
 
-pub fn build_terminal_bootstrap_command(service: &SshService, remote_dir: &Path) -> String {
-    let mut args = vec![shell_quote_str("ssh")];
+pub fn build_terminal_bootstrap_command(
+    service: &SshService,
+    remote_dir: &Path,
+    shell_flavor: LocalShellFlavor,
+) -> String {
+    let args = build_terminal_bootstrap_args(service, remote_dir);
+
+    match shell_flavor {
+        LocalShellFlavor::Posix => render_posix_command(&args),
+        LocalShellFlavor::Cmd => render_cmd_command(&args),
+        LocalShellFlavor::PowerShell => render_powershell_command(&args),
+    }
+}
+
+fn build_terminal_bootstrap_args(service: &SshService, remote_dir: &Path) -> Vec<String> {
+    let mut args = vec!["ssh".to_string()];
 
     if service.port != 22 {
-        args.push(shell_quote_str("-p"));
-        args.push(shell_quote_str(&service.port.to_string()));
+        args.push("-p".into());
+        args.push(service.port.to_string());
     }
 
     if let SshAuth::Key { path, .. } = &service.auth {
-        args.push(shell_quote_str("-i"));
-        args.push(shell_quote_path(path));
+        args.push("-i".into());
+        args.push(path.display().to_string());
     }
 
-    args.push(shell_quote_str(&service.display_destination()));
-    args.push(shell_quote_str(&format!(
+    args.push(service.display_destination());
+    args.push(format!(
         "cd {} && exec ${{SHELL:-/bin/bash}} -l",
         shell_quote_path(remote_dir)
-    )));
+    ));
 
-    args.join(" ")
+    args
+}
+
+fn render_posix_command(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_quote_str(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn render_cmd_command(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| cmd_quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn render_powershell_command(args: &[String]) -> String {
+    let rendered = args
+        .iter()
+        .map(|arg| powershell_quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!("& {rendered}")
 }
 
 pub fn build_remote_list_command(
@@ -107,6 +145,24 @@ fn shell_quote_path(path: &Path) -> String {
 
 fn shell_quote_str(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'\''"#))
+}
+
+fn cmd_quote_arg(value: &str) -> String {
+    let escaped = value
+        .replace('"', r#"\""#)
+        .replace('%', "%%")
+        .replace('&', "^&")
+        .replace('|', "^|")
+        .replace('<', "^<")
+        .replace('>', "^>")
+        .replace('(', "^(")
+        .replace(')', "^)");
+
+    format!("\"{escaped}\"")
+}
+
+fn powershell_quote_arg(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "`\"").replace('$', "`$"))
 }
 
 #[cfg(test)]

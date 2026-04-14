@@ -627,6 +627,7 @@ fn ssh_terminal_bootstrap_command_uses_key_auth() {
     let command = crate::ssh::build_terminal_bootstrap_command(
         &service,
         std::path::Path::new("/srv/my app"),
+        crate::terminal::LocalShellFlavor::Posix,
     );
 
     assert!(command.contains("ssh"));
@@ -636,6 +637,53 @@ fn ssh_terminal_bootstrap_command_uses_key_auth() {
     assert!(command.contains("'deploy@example.com'"));
     assert!(command.contains("/srv/my app"));
     assert!(!command.contains("secret"));
+}
+
+#[test]
+fn ssh_terminal_bootstrap_command_uses_cmd_quoting_for_windows() {
+    let service = SshService {
+        port: 2222,
+        auth: SshAuth::Key {
+            path: std::path::PathBuf::from(r#"C:\Users\test user\.ssh\id_ed25519"#),
+            passphrase: None,
+        },
+        ..sample_ssh_service()
+    };
+
+    let command = crate::ssh::build_terminal_bootstrap_command(
+        &service,
+        std::path::Path::new("/srv/my app"),
+        crate::terminal::LocalShellFlavor::Cmd,
+    );
+
+    assert!(command.contains("\"ssh\""));
+    assert!(command.contains("\"-p\" \"2222\""));
+    assert!(command.contains("\"-i\" \"C:\\Users\\test user\\.ssh\\id_ed25519\""));
+    assert!(command.contains("\"deploy@example.com\""));
+    assert!(command.contains("exec ${SHELL:-/bin/bash} -l"));
+    assert!(!command.contains("'ssh'"));
+}
+
+#[test]
+fn ssh_terminal_bootstrap_command_uses_powershell_quoting_for_windows() {
+    let service = SshService {
+        auth: SshAuth::Key {
+            path: std::path::PathBuf::from(r#"C:\Users\test user\.ssh\id_ed25519"#),
+            passphrase: None,
+        },
+        ..sample_ssh_service()
+    };
+
+    let command = crate::ssh::build_terminal_bootstrap_command(
+        &service,
+        std::path::Path::new("/srv/it's app"),
+        crate::terminal::LocalShellFlavor::PowerShell,
+    );
+
+    assert!(command.contains("& \"ssh\""));
+    assert!(command.contains("\"C:\\Users\\test user\\.ssh\\id_ed25519\""));
+    assert!(command.contains("deploy@example.com"));
+    assert!(command.contains("/srv/it'\\''s app"));
 }
 
 #[test]
@@ -669,6 +717,7 @@ fn ssh_terminal_bootstrap_command_quotes_key_path_with_spaces() {
     let command = crate::ssh::build_terminal_bootstrap_command(
         &service,
         std::path::Path::new("/srv/app"),
+        crate::terminal::LocalShellFlavor::Posix,
     );
 
     assert!(command.contains("'/home/test/.ssh/my key'"));
@@ -1011,7 +1060,11 @@ fn build_terminal_bootstrap_command_quotes_destination_and_remote_dir() {
     };
 
     let remote_dir = std::path::Path::new("/srv/it's app");
-    let command = crate::ssh::build_terminal_bootstrap_command(&service, remote_dir);
+    let command = crate::ssh::build_terminal_bootstrap_command(
+        &service,
+        remote_dir,
+        crate::terminal::LocalShellFlavor::Posix,
+    );
 
     assert!(command.contains("'deploy user@example.com'"));
     assert!(command.contains("exec ${SHELL:-/bin/bash} -l"));
