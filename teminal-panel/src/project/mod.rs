@@ -28,6 +28,20 @@ pub struct SshService {
     pub auth: SshAuth,
 }
 
+impl SshService {
+    pub fn display_destination(&self) -> String {
+        format!("{}@{}", self.user, self.host)
+    }
+
+    pub fn display_remote_location(&self, path: &std::path::Path) -> String {
+        if self.port == 22 {
+            format!("{}:{}", self.display_destination(), path.display())
+        } else {
+            format!("{}:{}:{}", self.display_destination(), self.port, path.display())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SshAuth {

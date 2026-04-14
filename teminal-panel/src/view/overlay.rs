@@ -13,7 +13,13 @@ impl App {
             .selected_dir
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "No folder selected".into());
+            .unwrap_or_else(|| {
+                if self.add_form.connection_kind == ProjectConnectionKind::Ssh {
+                    "No remote path set".into()
+                } else {
+                    "No folder selected".into()
+                }
+            });
 
         let connection_row = row![
             button(text("Local").size(12))
@@ -41,15 +47,35 @@ impl App {
                 .on_submit(Message::SubmitAddProjectForm)
                 .into_element(),
             connection_row,
-            row![
-                text(selected_dir).size(12),
-                button(bootstrap::folder_plus().size(14))
-                    .on_press(Message::ChooseProjectFolder)
-                    .padding([4, 8])
-                    .style(button::secondary),
-            ]
-            .spacing(8)
-            .align_y(iced::alignment::Vertical::Center),
+            {
+                let path_input: Element<'_, Message> = if self.add_form.connection_kind
+                    == ProjectConnectionKind::Ssh
+                {
+                    column![
+                        text("Remote Working Directory").size(12),
+                        TextInput::new("/srv/app", &selected_dir)
+                            .on_input(|value| {
+                                Message::ProjectFolderSelected(Some(std::path::PathBuf::from(value)))
+                            })
+                            .into_element(),
+                    ]
+                    .spacing(6)
+                    .into()
+                } else {
+                    row![
+                        text(selected_dir).size(12),
+                        button(bootstrap::folder_plus().size(14))
+                            .on_press(Message::ChooseProjectFolder)
+                            .padding([4, 8])
+                            .style(button::secondary),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::alignment::Vertical::Center)
+                    .into()
+                };
+
+                path_input
+            },
         ]
         .spacing(16);
 

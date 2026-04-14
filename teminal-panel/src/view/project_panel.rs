@@ -90,24 +90,7 @@ impl App {
             let mut project_col = column![name_row].spacing(0);
 
             if is_expanded {
-                let subtitle = match project.connection {
-                    Connection::Local => project.working_dir.display().to_string(),
-                    Connection::Ssh { service_id } => self
-                        .config
-                        .ssh_services
-                        .iter()
-                        .find(|service| service.id == service_id)
-                        .map(|service| {
-                            format!(
-                                "{}@{}:{} · {}",
-                                service.user,
-                                service.host,
-                                service.port,
-                                project.working_dir.display()
-                            )
-                        })
-                        .unwrap_or_else(|| project.working_dir.display().to_string()),
-                };
+                let subtitle = crate::app::project_subtitle(project, &self.config.ssh_services);
 
                 let path_row = container(
                     text(subtitle)
@@ -122,6 +105,52 @@ impl App {
                 });
 
                 project_col = project_col.push(path_row);
+
+                if let Some(remote_files) = self
+                    .terminals
+                    .get(&project.id)
+                    .and_then(|project_terms| project_terms.remote_files.as_ref())
+                {
+                    if let Some(label) = crate::app::remote_file_status_label(&remote_files.status) {
+                        project_col = project_col.push(
+                            container(
+                                text(label)
+                                    .size(10)
+                                    .color(iced::Color::from_rgb(0.45, 0.45, 0.45)),
+                            )
+                            .padding(Padding {
+                                top: 2.0,
+                                right: 8.0,
+                                bottom: 2.0,
+                                left: 28.0,
+                            }),
+                        );
+                    }
+
+                    if matches!(remote_files.status, crate::terminal::RemoteFileStatus::Loaded) {
+                        for entry in remote_files.entries.iter().take(40) {
+                            let icon = if entry.is_dir {
+                                bootstrap::folder().size(10)
+                            } else {
+                                bootstrap::file_earmark().size(10)
+                            };
+
+                            project_col = project_col.push(
+                                container(
+                                    row![icon, text(&entry.name).size(10)]
+                                        .spacing(4)
+                                        .align_y(iced::alignment::Vertical::Center),
+                                )
+                                .padding(Padding {
+                                    top: 2.0,
+                                    right: 8.0,
+                                    bottom: 2.0,
+                                    left: 28.0,
+                                }),
+                            );
+                        }
+                    }
+                }
 
                 if let Some(project_terms) = self.terminals.get(&project.id) {
                     for (i, ts) in project_terms.terminals.iter().enumerate() {

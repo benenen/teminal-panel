@@ -425,6 +425,72 @@ fn submit_add_form_creates_ssh_project_when_service_selected() {
 }
 
 #[test]
+fn submit_add_form_creates_ssh_project_for_non_local_remote_path() {
+    with_temp_config_dir(|_| {
+        let mut app = test_app();
+        let service = sample_ssh_service();
+        let service_id = service.id;
+        app.config.ssh_services.push(service);
+
+        let _ = app.update(Message::ShowAddProjectForm);
+        let _ = app.update(Message::FormNameChanged("Remote project".into()));
+        let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+        let _ = app.update(Message::FormSshServiceSelected(service_id));
+        let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/remote-only"))));
+        let _ = app.update(Message::SubmitAddProjectForm);
+
+        assert_eq!(app.config.projects.len(), 1);
+        assert_eq!(app.config.projects[0].working_dir, PathBuf::from("/srv/remote-only"));
+    });
+}
+
+#[test]
+fn choose_project_folder_is_noop_for_ssh_projects() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowAddProjectForm);
+    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+    let _ = app.update(Message::ChooseProjectFolder);
+
+    assert_eq!(app.add_form.selected_dir, None);
+}
+
+#[test]
+fn switching_to_ssh_preserves_manual_remote_path() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowAddProjectForm);
+    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/app"))));
+    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+
+    assert_eq!(app.add_form.selected_dir, Some(PathBuf::from("/srv/app")));
+}
+
+#[test]
+fn switching_back_to_local_clears_non_local_remote_path() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowAddProjectForm);
+    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/app"))));
+    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Local));
+
+    assert_eq!(app.add_form.selected_dir, None);
+}
+
+#[test]
+fn project_folder_selected_none_does_not_clear_remote_path() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowAddProjectForm);
+    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/app"))));
+    let _ = app.update(Message::ProjectFolderSelected(None));
+
+    assert_eq!(app.add_form.selected_dir, Some(PathBuf::from("/srv/app")));
+}
+
+#[test]
 fn submit_add_form_with_ssh_requires_service_selection() {
     with_temp_config_dir(|workspace_dir: &PathBuf| {
         let mut app = test_app();
@@ -473,4 +539,434 @@ fn ssh_key_auth_stores_key_path_and_passphrase() {
             SshAuth::Key { .. }
         ));
     });
+}
+
+#[test]
+fn ssh_display_location_omits_default_port() {
+    let service = sample_ssh_service();
+
+    assert_eq!(service.display_destination(), "deploy@example.com");
+    assert_eq!(
+        service.display_remote_location(std::path::Path::new("/srv/app")),
+        "deploy@example.com:/srv/app"
+    );
+}
+
+#[test]
+fn ssh_display_location_keeps_non_default_port() {
+    let service = SshService {
+        port: 2222,
+        ..sample_ssh_service()
+    };
+
+    assert_eq!(
+        service.display_remote_location(std::path::Path::new("/srv/app")),
+        "deploy@example.com:2222:/srv/app"
+    );
+}
+
+#[test]
+fn ssh_terminal_bootstrap_command_uses_key_auth() {
+    let service = SshService {
+        port: 2222,
+        auth: SshAuth::Key {
+            path: std::path::PathBuf::from("/home/test/.ssh/id_ed25519"),
+            passphrase: Some("secret".into()),
+        },
+        ..sample_ssh_service()
+    };
+
+    let command = crate::ssh::build_terminal_bootstrap_command(
+        &service,
+        std::path::Path::new("/srv/my app"),
+    );
+
+    assert!(command.contains("ssh"));
+    assert!(command.contains("-i"));
+    assert!(command.contains("/home/test/.ssh/id_ed25519"));
+    assert!(command.contains("'-p' '2222'"));
+    assert!(command.contains("'deploy@example.com'"));
+    assert!(command.contains("/srv/my app"));
+    assert!(!command.contains("secret"));
+}
+
+#[test]
+fn ssh_remote_browse_rejects_password_auth() {
+    let service = SshService {
+        auth: SshAuth::Password("secret".into()),
+        ..sample_ssh_service()
+    };
+
+    let result = crate::ssh::build_remote_list_command(
+        &service,
+        std::path::Path::new("/srv/app"),
+    );
+
+    assert!(matches!(
+        result,
+        Err(crate::ssh::RemoteListCommandError::PasswordAuthUnsupported)
+    ));
+}
+
+#[test]
+fn ssh_terminal_bootstrap_command_quotes_key_path_with_spaces() {
+    let service = SshService {
+        auth: SshAuth::Key {
+            path: std::path::PathBuf::from("/home/test/.ssh/my key"),
+            passphrase: None,
+        },
+        ..sample_ssh_service()
+    };
+
+    let command = crate::ssh::build_terminal_bootstrap_command(
+        &service,
+        std::path::Path::new("/srv/app"),
+    );
+
+    assert!(command.contains("'/home/test/.ssh/my key'"));
+}
+
+#[test]
+fn ssh_shell_quote_escapes_single_quotes() {
+    let quoted = crate::ssh::shell_quote_for_test(std::path::Path::new("/srv/it's app"));
+
+    assert_eq!(quoted, "'/srv/it'\\''s app'");
+}
+
+#[test]
+fn ssh_project_subtitle_uses_remote_location_format() {
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+
+    let subtitle = super::project_subtitle_for_test(&project, &[service]);
+
+    assert_eq!(subtitle, "deploy@example.com:/srv/project");
+}
+
+#[test]
+fn ensure_project_terminals_initializes_remote_file_state() {
+    let state = crate::terminal::ProjectTerminals::new();
+
+    assert!(state.remote_files.is_none());
+}
+
+#[test]
+fn request_remote_files_marks_loading_for_agent_auth() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::RequestRemoteFiles(project_id));
+
+    let state = app
+        .terminals
+        .get(&project_id)
+        .and_then(|state| state.remote_files.as_ref())
+        .expect("remote file state");
+    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loading));
+}
+
+#[test]
+fn password_auth_remote_browse_is_marked_unsupported() {
+    let mut app = test_app();
+    let service = SshService {
+        auth: SshAuth::Password("secret".into()),
+        ..sample_ssh_service()
+    };
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::RequestRemoteFiles(project_id));
+
+    let state = app
+        .terminals
+        .get(&project_id)
+        .and_then(|state| state.remote_files.as_ref())
+        .expect("remote file state");
+    assert!(matches!(
+        state.status,
+        crate::terminal::RemoteFileStatus::Unsupported(_)
+    ));
+}
+
+#[test]
+fn remote_files_loaded_updates_entries() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+    app.terminals
+        .insert(project_id, crate::terminal::ProjectTerminals::new());
+
+    let _ = app.update(Message::RemoteFilesLoaded {
+        project_id,
+        result: Ok(vec![crate::terminal::RemoteFileEntry {
+            name: "src".into(),
+            path: "/srv/project/src".into(),
+            is_dir: true,
+        }]),
+    });
+
+    let state = app
+        .terminals
+        .get(&project_id)
+        .and_then(|state| state.remote_files.as_ref())
+        .expect("remote file state");
+    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loaded));
+    assert_eq!(state.entries.len(), 1);
+}
+
+#[test]
+fn selecting_ssh_project_requests_remote_files() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::SelectProject(project_id));
+
+    let state = app
+        .terminals
+        .get(&project_id)
+        .and_then(|state| state.remote_files.as_ref())
+        .expect("remote file state");
+    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loading));
+}
+
+#[test]
+fn missing_ssh_service_falls_back_to_plain_path_subtitle() {
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        Uuid::new_v4(),
+    );
+
+    let subtitle = super::project_subtitle_for_test(&project, &[]);
+    assert_eq!(subtitle, "/srv/project");
+}
+
+#[test]
+fn remote_file_status_message_for_unsupported_state_is_readable() {
+    let status = crate::terminal::RemoteFileStatus::Unsupported(
+        "Remote browsing supports SSH agent/key auth only".into(),
+    );
+    let message = super::remote_file_status_label_for_test(&status);
+
+    assert_eq!(message, Some("Remote browsing supports SSH agent/key auth only"));
+}
+
+#[test]
+fn open_terminal_for_ssh_project_creates_terminal_state() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::OpenTerminal(project_id));
+
+    let project_terms = app.terminals.get(&project_id).expect("terminal state");
+    assert_eq!(project_terms.terminals.len(), 1);
+}
+
+#[test]
+fn parse_remote_entries_reads_kind_and_name() {
+    let entries = crate::ssh::parse_remote_entries_for_test("d\tsrc\nf\tCargo.toml\n", "/srv/app")
+        .expect("parse entries");
+
+    assert_eq!(entries.len(), 2);
+    assert!(entries[0].is_dir);
+    assert_eq!(entries[0].path, "/srv/app/src");
+    assert_eq!(entries[1].name, "Cargo.toml");
+}
+
+#[test]
+fn ssh_terminal_settings_do_not_require_remote_path_locally() {
+    let settings = crate::terminal::settings_for_local_shell();
+
+    assert!(settings.backend.working_directory.is_none());
+}
+
+#[test]
+fn remote_file_status_message_for_loading_state_is_readable() {
+    let status = crate::terminal::RemoteFileStatus::Loading;
+    let message = super::remote_file_status_label_for_test(&status);
+
+    assert_eq!(message, Some("Loading remote files..."));
+}
+
+#[test]
+fn open_terminal_for_ssh_project_with_missing_local_path_creates_terminal_state() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/definitely/not/local"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::OpenTerminal(project_id));
+
+    let project_terms = app.terminals.get(&project_id).expect("terminal state");
+    assert_eq!(project_terms.terminals.len(), 1);
+}
+
+#[test]
+fn open_terminal_for_ssh_project_bootstraps_ssh_command() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::OpenTerminal(project_id));
+
+    let project_terms = app.terminals.get(&project_id).expect("terminal state");
+    let title = project_terms.terminals[0].title.as_deref();
+    assert_eq!(title, Some("ssh: deploy@example.com:/srv/project"));
+}
+
+#[test]
+fn open_terminal_for_local_project_does_not_set_ssh_bootstrap_title() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::AddProject {
+            name: "Local project".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::OpenTerminal(project_id));
+
+        let project_terms = app.terminals.get(&project_id).expect("terminal state");
+        assert_eq!(project_terms.terminals[0].title, None);
+    });
+}
+
+#[test]
+fn remote_file_status_message_for_loaded_state_is_none() {
+    let status = crate::terminal::RemoteFileStatus::Loaded;
+    let message = super::remote_file_status_label_for_test(&status);
+
+    assert_eq!(message, None);
+}
+
+#[test]
+fn remote_file_status_message_for_idle_state_is_none() {
+    let status = crate::terminal::RemoteFileStatus::Idle;
+    let message = super::remote_file_status_label_for_test(&status);
+
+    assert_eq!(message, None);
+}
+
+#[test]
+fn selecting_ssh_project_does_not_reload_existing_remote_files() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+    app.terminals.insert(
+        project_id,
+        crate::terminal::ProjectTerminals {
+            terminals: Vec::new(),
+            active_index: 0,
+            display_mode: crate::terminal::DisplayMode::Tabs,
+            remote_files: Some(crate::terminal::RemoteFileState {
+                path: "/srv/project".into(),
+                status: crate::terminal::RemoteFileStatus::Loaded,
+                entries: vec![crate::terminal::RemoteFileEntry {
+                    name: "src".into(),
+                    path: "/srv/project/src".into(),
+                    is_dir: true,
+                }],
+            }),
+        },
+    );
+
+    let _ = app.update(Message::SelectProject(project_id));
+
+    let state = app
+        .terminals
+        .get(&project_id)
+        .and_then(|state| state.remote_files.as_ref())
+        .expect("remote file state");
+    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loaded));
+    assert_eq!(state.entries.len(), 1);
+}
+
+#[test]
+fn remote_files_loaded_error_sets_error_state() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+    app.terminals.insert(project_id, crate::terminal::ProjectTerminals::new());
+
+    let _ = app.update(Message::RemoteFilesLoaded {
+        project_id,
+        result: Err("boom".into()),
+    });
+
+    let state = app
+        .terminals
+        .get(&project_id)
+        .and_then(|state| state.remote_files.as_ref())
+        .expect("remote file state");
+    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Error(_)));
+}
+
+#[test]
+fn build_terminal_bootstrap_command_quotes_destination_and_remote_dir() {
+    let service = SshService {
+        user: "deploy user".into(),
+        host: "example.com".into(),
+        ..sample_ssh_service()
+    };
+
+    let remote_dir = std::path::Path::new("/srv/it's app");
+    let command = crate::ssh::build_terminal_bootstrap_command(&service, remote_dir);
+
+    assert!(command.contains("'deploy user@example.com'"));
+    assert!(command.contains("exec ${SHELL:-/bin/bash} -l"));
+    assert!(command.contains("it"));
+    assert!(command.contains("app"));
 }

@@ -14,10 +14,34 @@ pub enum DisplayMode {
     Panel,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteFileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteFileStatus {
+    Idle,
+    Loading,
+    Loaded,
+    Error(String),
+    Unsupported(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteFileState {
+    pub path: String,
+    pub status: RemoteFileStatus,
+    pub entries: Vec<RemoteFileEntry>,
+}
+
 pub struct ProjectTerminals {
     pub terminals: Vec<TerminalState>,
     pub active_index: usize,
     pub display_mode: DisplayMode,
+    pub remote_files: Option<RemoteFileState>,
 }
 
 impl ProjectTerminals {
@@ -26,6 +50,7 @@ impl ProjectTerminals {
             terminals: Vec::new(),
             active_index: 0,
             display_mode: DisplayMode::Tabs,
+            remote_files: None,
         }
     }
 
@@ -44,6 +69,12 @@ impl ProjectTerminals {
 }
 
 pub fn settings_for_working_dir(working_dir: &Path) -> iced_term::settings::Settings {
+    let mut settings = settings_for_local_shell();
+    settings.backend.working_directory = Some(working_dir.to_path_buf());
+    settings
+}
+
+pub fn settings_for_local_shell() -> iced_term::settings::Settings {
     iced_term::settings::Settings {
         font: iced_term::settings::FontSettings {
             size: 16.0,
@@ -52,7 +83,6 @@ pub fn settings_for_working_dir(working_dir: &Path) -> iced_term::settings::Sett
         },
         backend: iced_term::settings::BackendSettings {
             program: default_shell(),
-            working_directory: Some(working_dir.to_path_buf()),
             env: HashMap::from([
                 ("TERM".into(), "xterm-256color".into()),
                 ("COLORTERM".into(), "truecolor".into()),
@@ -88,6 +118,6 @@ fn default_shell() -> String {
 
     #[cfg(not(windows))]
     {
-        return std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
     }
 }
