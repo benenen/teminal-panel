@@ -31,6 +31,7 @@ fn test_app() -> App {
         editing_terminal: None,
         add_form: Default::default(),
         overlay: None,
+        settings_menu_open: false,
         ssh_service_form: Default::default(),
         editing_ssh_service: None,
         terminals: std::collections::HashMap::new(),
@@ -324,26 +325,38 @@ fn project_folder_selected_none_preserves_existing_selection() {
 }
 
 #[test]
-fn toggle_settings_menu_updates_overlay_state() {
+fn toggle_settings_menu_updates_menu_state() {
     let mut app = test_app();
 
     let _ = app.update(Message::ToggleSettingsMenu);
-    assert_eq!(app.overlay, Some(OverlayState::SettingsMenu));
+    assert!(app.settings_menu_open);
+    assert_eq!(app.overlay, None);
 
     let _ = app.update(Message::ToggleSettingsMenu);
+    assert!(!app.settings_menu_open);
     assert_eq!(app.overlay, None);
 }
 
 #[test]
-fn showing_settings_menu_closes_add_project_overlay() {
+fn showing_add_project_closes_settings_menu() {
     let mut app = test_app();
 
-    let _ = app.update(Message::ShowAddProjectForm);
-    let _ = app.update(Message::FormNameChanged("stale".into()));
     let _ = app.update(Message::ToggleSettingsMenu);
+    let _ = app.update(Message::ShowAddProjectForm);
 
-    assert_eq!(app.overlay, Some(OverlayState::SettingsMenu));
-    assert!(app.add_form.name.is_empty());
+    assert!(!app.settings_menu_open);
+    assert_eq!(app.overlay, Some(OverlayState::AddProject));
+}
+
+#[test]
+fn showing_ssh_services_closes_settings_menu_without_using_menu_overlay() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ToggleSettingsMenu);
+    let _ = app.update(Message::ShowSshServices);
+
+    assert!(!app.settings_menu_open);
+    assert_eq!(app.overlay, Some(OverlayState::SshServices));
 }
 
 #[test]

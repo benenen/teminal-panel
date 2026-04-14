@@ -1,7 +1,7 @@
 use crate::app::{App, Message, SshAuthType};
 use crate::project::{panel::ProjectConnectionKind, SshAuth};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Length, Padding};
+use iced::{Element, Length};
 use iced_fonts::bootstrap;
 use teminal_ui::components::{Button, TextInput};
 use teminal_ui::containers::Modal;
@@ -129,39 +129,6 @@ impl App {
             .with_title("Add Project")
             .on_close(Message::HideAddProjectForm)
             .into_element()
-    }
-
-    pub(crate) fn view_settings_menu_overlay(&self) -> Element<'_, Message> {
-        let menu = container(
-            column![
-                button(text("SSH Service Settings").size(12))
-                    .on_press(Message::ShowSshServices)
-                    .padding([6, 8])
-                    .style(button::text),
-            ]
-            .spacing(4),
-        )
-        .padding(8)
-        .style(|_| {
-            container::Style::default()
-                .background(iced::Color::from_rgb(0.14, 0.14, 0.14))
-                .border(iced::Border {
-                    color: iced::Color::from_rgb(0.22, 0.22, 0.22),
-                    width: 1.0,
-                    radius: 8.into(),
-                })
-        });
-
-        container(row![container(menu).width(Length::Fixed(220.0)), container(text(""))])
-            .width(Length::Fill)
-            .height(Length::Shrink)
-            .padding(Padding {
-                top: 0.0,
-                right: 0.0,
-                bottom: 12.0,
-                left: 12.0,
-            })
-            .into()
     }
 
     pub(crate) fn view_ssh_services_overlay(&self) -> Element<'_, Message> {

@@ -3,7 +3,7 @@ use crate::project::Connection;
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text, text_input};
 use iced::{Element, Length, Padding};
 use iced_fonts::bootstrap;
-use teminal_ui::components::TruncatedTooltipText;
+use teminal_ui::components::{ContextMenu, TruncatedTooltipText};
 
 impl App {
     pub(crate) fn view_project_panel(&self) -> Element<'_, Message> {
@@ -249,7 +249,7 @@ impl App {
         ]
         .align_y(iced::alignment::Vertical::Center);
 
-        let footer = row![
+        let footer_button = row![
             button(bootstrap::gear().size(14))
                 .on_press(Message::ToggleSettingsMenu)
                 .padding([6, 8])
@@ -257,11 +257,49 @@ impl App {
         ]
         .align_y(iced::alignment::Vertical::Center);
 
+        let footer: Element<'_, Message> = if self.settings_menu_open {
+            let menu = ContextMenu::new(
+                column![
+                    button(text("SSH Service Settings").size(12))
+                        .on_press(Message::ShowSshServices)
+                        .padding([6, 8])
+                        .style(button::text),
+                ]
+                .spacing(4)
+                .into(),
+            )
+            .into_element();
+
+            iced::widget::stack![
+                mouse_area(container(text(""))
+                    .width(Length::Fill)
+                    .height(Length::Fill))
+                    .on_press(Message::HideSettingsMenu),
+                container(
+                    column![
+                        container(menu).padding(Padding {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 44.0,
+                            left: 0.0,
+                        }),
+                        footer_button,
+                    ]
+                    .align_x(iced::alignment::Horizontal::Left)
+                )
+                .width(Length::Fill)
+                .height(Length::Shrink)
+            ]
+            .into()
+        } else {
+            footer_button.into()
+        };
+
         container(
             column![
                 container(header).padding([8, 10]),
                 scrollable(project_list.spacing(2).padding([0, 6])).height(Length::Fill),
-                container(footer).padding([8, 10]),
+                container(footer).padding([8, 10]).height(Length::Fixed(84.0)),
             ]
             .spacing(0),
         )

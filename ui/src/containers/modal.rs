@@ -39,8 +39,9 @@ impl<'a, Message: Clone + 'a> Modal<'a, Message> {
 
         if self.title.is_some() || self.on_close.is_some() {
             let title = self.title.unwrap_or_default();
-            let mut header = row![text(title).size(20).width(Length::Fill)]
-                .align_y(iced::alignment::Vertical::Center);
+            let mut header = row![text(title).size(22).width(Length::Fill)]
+                .align_y(iced::alignment::Vertical::Center)
+                .height(Length::Fixed(32.0));
 
             if let Some(message) = self.on_close {
                 header = header.push(
@@ -56,7 +57,7 @@ impl<'a, Message: Clone + 'a> Modal<'a, Message> {
 
         modal_content = modal_content.push(self.content);
 
-        let modal = container(modal_content.spacing(16))
+        let modal = container(modal_content.spacing(20))
             .width(self.width)
             .style(|_| {
                 container::Style::default()
@@ -67,7 +68,7 @@ impl<'a, Message: Clone + 'a> Modal<'a, Message> {
                         radius: 8.0.into(),
                     })
             })
-            .padding(20);
+            .padding(24);
 
         container(modal)
             .width(Length::Fill)

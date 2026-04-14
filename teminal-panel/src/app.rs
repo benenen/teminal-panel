@@ -23,6 +23,7 @@ pub struct App {
     pub editing_terminal: Option<(Uuid, usize)>,
     pub add_form: AddProjectForm,
     pub overlay: Option<OverlayState>,
+    pub settings_menu_open: bool,
     pub ssh_service_form: SshServiceForm,
     pub editing_ssh_service: Option<Uuid>,
     pub terminals: HashMap<Uuid, ProjectTerminals>,
@@ -45,6 +46,7 @@ pub enum Message {
     ProjectFolderSelected(Option<PathBuf>),
     SubmitAddProjectForm,
     ToggleSettingsMenu,
+    HideSettingsMenu,
     ShowSshServices,
     HideOverlay,
     ShowAddSshServiceForm,
@@ -78,7 +80,6 @@ pub enum Message {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayState {
-    SettingsMenu,
     AddProject,
     SshServices,
 }
@@ -128,6 +129,7 @@ impl App {
                 editing_terminal: None,
                 add_form: Default::default(),
                 overlay: None,
+                settings_menu_open: false,
                 ssh_service_form: Default::default(),
                 editing_ssh_service: None,
                 terminals: HashMap::new(),
@@ -166,6 +168,7 @@ impl App {
             }
             Message::ShowAddProjectForm => {
                 self.add_form = Default::default();
+                self.settings_menu_open = false;
                 self.overlay = Some(OverlayState::AddProject);
             }
             Message::HideAddProjectForm => {
@@ -230,25 +233,26 @@ impl App {
                     if added {
                         self.add_form = Default::default();
                         self.overlay = None;
+                        self.settings_menu_open = false;
                     }
                 }
             }
             Message::ToggleSettingsMenu => {
-                self.add_form = Default::default();
-                self.overlay = if self.overlay == Some(OverlayState::SettingsMenu) {
-                    None
-                } else {
-                    Some(OverlayState::SettingsMenu)
-                };
+                self.settings_menu_open = !self.settings_menu_open;
+            }
+            Message::HideSettingsMenu => {
+                self.settings_menu_open = false;
             }
             Message::ShowSshServices => {
                 self.add_form = Default::default();
+                self.settings_menu_open = false;
                 self.overlay = Some(OverlayState::SshServices);
                 self.editing_ssh_service = None;
                 self.ssh_service_form = Default::default();
             }
             Message::HideOverlay => {
                 self.overlay = None;
+                self.settings_menu_open = false;
                 self.editing_ssh_service = None;
                 self.ssh_service_form = Default::default();
             }
@@ -588,11 +592,10 @@ impl App {
 
         if let Some(overlay) = self.overlay {
             let overlay_view = match overlay {
-                OverlayState::SettingsMenu => self.view_settings_menu_overlay(),
                 OverlayState::AddProject => self.view_add_project_overlay(),
                 OverlayState::SshServices => self.view_ssh_services_overlay(),
             };
-            iced::widget::column![main_content, overlay_view].into()
+            iced::widget::stack![main_content, overlay_view].into()
         } else {
             main_content.into()
         }
