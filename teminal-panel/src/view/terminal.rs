@@ -25,7 +25,11 @@ impl App {
         let content = if let Some(selected_id) = self.selected_project {
             if let Some(project) = self.config.projects.iter().find(|p| p.id == selected_id) {
                 if let Some(project_terms) = self.terminals.get(&selected_id) {
-                    self.view_terminals(selected_id, &project.name, project_terms)
+                    if project_terms.terminals.is_empty() {
+                        self.view_empty_project(selected_id, &project.name)
+                    } else {
+                        self.view_terminals(selected_id, &project.name, project_terms)
+                    }
                 } else {
                     self.view_empty_project(selected_id, &project.name)
                 }

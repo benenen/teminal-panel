@@ -101,6 +101,7 @@ pub struct SshServiceForm {
     pub password: String,
     pub key_path: String,
     pub key_passphrase: String,
+    pub error: Option<String>,
 }
 
 impl Default for SshServiceForm {
@@ -114,6 +115,7 @@ impl Default for SshServiceForm {
             password: String::new(),
             key_path: String::new(),
             key_passphrase: String::new(),
+            error: None,
         }
     }
 }
@@ -285,27 +287,35 @@ impl App {
             }
             Message::SshServiceNameChanged(value) => {
                 self.ssh_service_form.name = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServiceHostChanged(value) => {
                 self.ssh_service_form.host = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServicePortChanged(value) => {
                 self.ssh_service_form.port = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServiceUserChanged(value) => {
                 self.ssh_service_form.user = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServiceAuthTypeChanged(value) => {
                 self.ssh_service_form.auth_type = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServicePasswordChanged(value) => {
                 self.ssh_service_form.password = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServiceKeyPathChanged(value) => {
                 self.ssh_service_form.key_path = value;
+                self.ssh_service_form.error = None;
             }
             Message::SshServiceKeyPassphraseChanged(value) => {
                 self.ssh_service_form.key_passphrase = value;
+                self.ssh_service_form.error = None;
             }
             Message::SubmitSshServiceForm => {
                 if let Some(service) = self
@@ -327,6 +337,8 @@ impl App {
                     self.config.save();
                     self.editing_ssh_service = None;
                     self.ssh_service_form = Default::default();
+                } else {
+                    self.ssh_service_form.error = Some(self.ssh_service_form.validation_error());
                 }
             }
             Message::CancelSshServiceForm => {
@@ -359,7 +371,7 @@ impl App {
                     return Task::none();
                 };
 
-                if matches!(service.auth, SshAuth::Password(_)) {
+                if matches!(service.auth, SshAuth::Password { .. }) {
                     self.ensure_project_terminals(project_id).remote_files = Some(RemoteFileState {
                         path: path.display().to_string(),
                         status: RemoteFileStatus::Unsupported(
@@ -688,7 +700,7 @@ impl App {
 impl SshServiceForm {
     fn from_service(service: &SshService) -> Self {
         let (auth_type, password, key_path, key_passphrase) = match &service.auth {
-            SshAuth::Password(password) => (
+            SshAuth::Password { password } => (
                 SshAuthType::Password,
                 password.clone(),
                 String::new(),
@@ -717,48 +729,69 @@ impl SshServiceForm {
             password,
             key_path,
             key_passphrase,
+            error: None,
         }
     }
 
-    fn to_service(&self, id: Uuid) -> Option<SshService> {
-        let name = self.name.trim();
-        let host = self.host.trim();
-        let user = self.user.trim();
-        let port = self.port.trim().parse::<u16>().ok()?;
+    fn validation_error(&self) -> String {
+        if self.name.trim().is_empty() {
+            return "Name is required".into();
+        }
+        if self.host.trim().is_empty() {
+            return "Host is required".into();
+        }
+        if self.port.trim().is_empty() {
+            return "Port is required".into();
+        }
+        if self.port.trim().parse::<u16>().is_err() {
+            return "Port must be a valid number".into();
+        }
+        if self.user.trim().is_empty() {
+            return "User is required".into();
+        }
+        match self.auth_type {
+            SshAuthType::Agent => {}
+            SshAuthType::Password if self.password.is_empty() => {
+                return "Password is required".into();
+            }
+            SshAuthType::Key if self.key_path.trim().is_empty() => {
+                return "Key path is required".into();
+            }
+            SshAuthType::Password | SshAuthType::Key => {}
+        }
+        String::new()
+    }
 
-        if name.is_empty() || host.is_empty() || user.is_empty() {
+    fn can_submit(&self) -> bool {
+        self.validation_error().is_empty()
+    }
+
+    fn to_service(&self, id: Uuid) -> Option<SshService> {
+        if !self.can_submit() {
             return None;
         }
 
         let auth = match self.auth_type {
             SshAuthType::Agent => SshAuth::Agent,
-            SshAuthType::Password => {
-                if self.password.is_empty() {
-                    return None;
-                }
-                SshAuth::Password(self.password.clone())
-            }
-            SshAuthType::Key => {
-                if self.key_path.trim().is_empty() {
-                    return None;
-                }
-                SshAuth::Key {
-                    path: PathBuf::from(self.key_path.trim()),
-                    passphrase: if self.key_passphrase.is_empty() {
-                        None
-                    } else {
-                        Some(self.key_passphrase.clone())
-                    },
-                }
-            }
+            SshAuthType::Password => SshAuth::Password {
+                password: self.password.clone(),
+            },
+            SshAuthType::Key => SshAuth::Key {
+                path: PathBuf::from(self.key_path.trim()),
+                passphrase: if self.key_passphrase.is_empty() {
+                    None
+                } else {
+                    Some(self.key_passphrase.clone())
+                },
+            },
         };
 
         Some(SshService {
             id,
-            name: name.into(),
-            host: host.into(),
-            port,
-            user: user.into(),
+            name: self.name.trim().into(),
+            host: self.host.trim().into(),
+            port: self.port.trim().parse().ok()?,
+            user: self.user.trim().into(),
             auth,
         })
     }

@@ -409,8 +409,45 @@ fn submit_ssh_service_form_adds_service_and_persists() {
 
         assert_eq!(app.config.ssh_services.len(), 1);
         assert_eq!(app.config.ssh_services[0].name, "Prod");
-        assert_eq!(AppConfig::load().ssh_services.len(), 1);
+        let persisted = AppConfig::load();
+        assert_eq!(persisted.ssh_services.len(), 1);
+        assert_eq!(persisted.ssh_services[0].name, "Prod");
+        assert_eq!(persisted.ssh_services[0].host, "example.com");
     });
+}
+
+#[test]
+fn app_new_loads_persisted_ssh_services() {
+    with_temp_config_dir(|_| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::ShowSshServices);
+        let _ = app.update(Message::SshServiceNameChanged("Prod".into()));
+        let _ = app.update(Message::SshServiceHostChanged("example.com".into()));
+        let _ = app.update(Message::SshServicePortChanged("22".into()));
+        let _ = app.update(Message::SshServiceUserChanged("deploy".into()));
+        let _ = app.update(Message::SshServiceAuthTypeChanged(SshAuthType::Agent));
+        let _ = app.update(Message::SubmitSshServiceForm);
+
+        let (reloaded, _) = App::new();
+        assert_eq!(reloaded.config.ssh_services.len(), 1);
+        assert_eq!(reloaded.config.ssh_services[0].name, "Prod");
+        assert_eq!(reloaded.config.ssh_services[0].host, "example.com");
+    });
+}
+
+#[test]
+fn submit_ssh_service_form_with_missing_required_field_keeps_overlay_open() {
+    let mut app = test_app();
+
+    let _ = app.update(Message::ShowSshServices);
+    let _ = app.update(Message::SshServiceNameChanged("Prod".into()));
+    let _ = app.update(Message::SshServicePortChanged("22".into()));
+    let _ = app.update(Message::SshServiceUserChanged("deploy".into()));
+    let _ = app.update(Message::SubmitSshServiceForm);
+
+    assert_eq!(app.overlay, Some(OverlayState::SshServices));
+    assert!(app.config.ssh_services.is_empty());
 }
 
 #[test]
@@ -689,7 +726,9 @@ fn ssh_terminal_bootstrap_command_uses_powershell_quoting_for_windows() {
 #[test]
 fn ssh_remote_browse_rejects_password_auth() {
     let service = SshService {
-        auth: SshAuth::Password("secret".into()),
+        auth: SshAuth::Password {
+            password: "secret".into(),
+        },
         ..sample_ssh_service()
     };
 
@@ -778,7 +817,9 @@ fn request_remote_files_marks_loading_for_agent_auth() {
 fn password_auth_remote_browse_is_marked_unsupported() {
     let mut app = test_app();
     let service = SshService {
-        auth: SshAuth::Password("secret".into()),
+        auth: SshAuth::Password {
+            password: "secret".into(),
+        },
         ..sample_ssh_service()
     };
     let project = crate::project::Project::new_ssh(
@@ -871,6 +912,26 @@ fn remote_file_status_message_for_unsupported_state_is_readable() {
     let message = super::remote_file_status_label_for_test(&status);
 
     assert_eq!(message, Some("Remote browsing supports SSH agent/key auth only"));
+}
+
+#[test]
+fn selecting_ssh_project_only_initializes_remote_files_without_terminals() {
+    let mut app = test_app();
+    let service = sample_ssh_service();
+    let project = crate::project::Project::new_ssh(
+        "Remote".into(),
+        std::path::PathBuf::from("/srv/project"),
+        service.id,
+    );
+    let project_id = project.id;
+    app.config.ssh_services.push(service);
+    app.config.projects.push(project);
+
+    let _ = app.update(Message::SelectProject(project_id));
+
+    let project_terms = app.terminals.get(&project_id).expect("terminal state");
+    assert!(project_terms.terminals.is_empty());
+    assert!(project_terms.remote_files.is_some());
 }
 
 #[test]

@@ -72,7 +72,7 @@ pub fn build_remote_list_command(
     service: &SshService,
     remote_dir: &Path,
 ) -> Result<Vec<String>, RemoteListCommandError> {
-    if matches!(service.auth, SshAuth::Password(_)) {
+    if matches!(service.auth, SshAuth::Password { .. }) {
         return Err(RemoteListCommandError::PasswordAuthUnsupported);
     }
 

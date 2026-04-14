@@ -138,7 +138,7 @@ impl App {
             .iter()
             .fold(column![].spacing(8), |col, service| {
                 let auth_text = match service.auth {
-                    SshAuth::Password(_) => "password",
+                    SshAuth::Password { .. } => "password",
                     SshAuth::Key { .. } => "key",
                     SshAuth::Agent => "agent",
                 };
@@ -253,6 +253,16 @@ impl App {
             SshAuthType::Agent => {}
         }
 
+        if let Some(error) = &self.ssh_service_form.error {
+            form = form.push(text(error).size(12).color(iced::Color::from_rgb(0.9, 0.35, 0.35)));
+        }
+
+        let submit_label = if self.editing_ssh_service.is_some() { "Save" } else { "Add" };
+        let mut submit_button = Button::new(submit_label).width(Length::Fixed(120.0));
+        if self.ssh_service_form.can_submit() {
+            submit_button = submit_button.on_press(Message::SubmitSshServiceForm);
+        }
+
         form = form.push(
             row![
                 container(text("")).width(Length::Fill),
@@ -260,10 +270,7 @@ impl App {
                     .width(Length::Fixed(120.0))
                     .on_press(Message::CancelSshServiceForm)
                     .into_element(),
-                Button::new(if self.editing_ssh_service.is_some() { "Save" } else { "Add" })
-                    .width(Length::Fixed(120.0))
-                    .on_press(Message::SubmitSshServiceForm)
-                    .into_element(),
+                submit_button.into_element(),
             ]
             .spacing(8)
             .align_y(iced::alignment::Vertical::Center)

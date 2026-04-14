@@ -45,7 +45,7 @@ impl SshService {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SshAuth {
-    Password(String),
+    Password { password: String },
     Key {
         path: PathBuf,
         passphrase: Option<String>,

@@ -106,6 +106,35 @@ fn config_deserializes_ssh_services() {
 }
 
 #[test]
+fn config_serializes_and_deserializes_password_ssh_services() {
+    let service = SshService {
+        id: uuid::Uuid::new_v4(),
+        name: "Prod Password".into(),
+        host: "example.com".into(),
+        port: 22,
+        user: "deploy".into(),
+        auth: SshAuth::Password {
+            password: "secret".into(),
+        },
+    };
+    let config = AppConfig {
+        projects: vec![],
+        ssh_services: vec![service.clone()],
+    };
+
+    let text = toml::to_string_pretty(&config).expect("serialize config");
+    let compat: AppConfigCompat = toml::from_str(&text).expect("deserialize config");
+    let loaded = AppConfig::from_compat(compat);
+
+    assert_eq!(loaded.ssh_services.len(), 1);
+    assert_eq!(loaded.ssh_services[0].name, service.name);
+    match &loaded.ssh_services[0].auth {
+        SshAuth::Password { password } => assert_eq!(password, "secret"),
+        other => panic!("expected password auth, got {other:?}"),
+    }
+}
+
+#[test]
 fn missing_ssh_services_defaults_to_empty() {
     let config = AppConfig::from_compat(AppConfigCompat {
         projects: vec![Project::new_local(
@@ -117,4 +146,23 @@ fn missing_ssh_services_defaults_to_empty() {
     });
 
     assert!(config.ssh_services.is_empty());
+}
+
+#[test]
+fn config_path_defaults_to_home_config_directory() {
+    let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_CONFIG_HOME");
+
+    let path = AppConfig::config_path();
+
+    match previous_xdg {
+        Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+        None => std::env::remove_var("XDG_CONFIG_HOME"),
+    }
+
+    let home = dirs::home_dir().expect("home dir");
+    assert_eq!(
+        path,
+        home.join(".config").join("teminal-panel").join("config.toml")
+    );
 }

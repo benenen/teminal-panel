@@ -14,7 +14,7 @@ impl AppConfig {
     pub fn config_path() -> PathBuf {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(dirs::config_dir)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
             .unwrap_or_else(|| PathBuf::from("."));
 
         base.join("teminal-panel").join("config.toml")
