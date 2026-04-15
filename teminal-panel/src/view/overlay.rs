@@ -23,21 +23,29 @@ impl App {
 
         let connection_row = row![
             button(text("Local").size(12))
-                .on_press(Message::FormConnectionKindChanged(ProjectConnectionKind::Local))
+                .on_press(Message::FormConnectionKindChanged(
+                    ProjectConnectionKind::Local
+                ))
                 .padding([4, 8])
-                .style(if self.add_form.connection_kind == ProjectConnectionKind::Local {
-                    button::primary
-                } else {
-                    button::secondary
-                }),
+                .style(
+                    if self.add_form.connection_kind == ProjectConnectionKind::Local {
+                        button::primary
+                    } else {
+                        button::secondary
+                    }
+                ),
             button(text("SSH").size(12))
-                .on_press(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh))
+                .on_press(Message::FormConnectionKindChanged(
+                    ProjectConnectionKind::Ssh
+                ))
                 .padding([4, 8])
-                .style(if self.add_form.connection_kind == ProjectConnectionKind::Ssh {
-                    button::primary
-                } else {
-                    button::secondary
-                }),
+                .style(
+                    if self.add_form.connection_kind == ProjectConnectionKind::Ssh {
+                        button::primary
+                    } else {
+                        button::secondary
+                    }
+                ),
         ]
         .spacing(8);
 
@@ -48,31 +56,32 @@ impl App {
                 .into_element(),
             connection_row,
             {
-                let path_input: Element<'_, Message> = if self.add_form.connection_kind
-                    == ProjectConnectionKind::Ssh
-                {
-                    column![
-                        text("Remote Working Directory").size(12),
-                        TextInput::new("/srv/app", &selected_dir)
-                            .on_input(|value| {
-                                Message::ProjectFolderSelected(Some(std::path::PathBuf::from(value)))
-                            })
-                            .into_element(),
-                    ]
-                    .spacing(6)
-                    .into()
-                } else {
-                    row![
-                        text(selected_dir).size(12),
-                        button(bootstrap::folder_plus().size(14))
-                            .on_press(Message::ChooseProjectFolder)
-                            .padding([4, 8])
-                            .style(button::secondary),
-                    ]
-                    .spacing(8)
-                    .align_y(iced::alignment::Vertical::Center)
-                    .into()
-                };
+                let path_input: Element<'_, Message> =
+                    if self.add_form.connection_kind == ProjectConnectionKind::Ssh {
+                        column![
+                            text("Remote Working Directory").size(12),
+                            TextInput::new("/srv/app", &selected_dir)
+                                .on_input(|value| {
+                                    Message::ProjectFolderSelected(Some(std::path::PathBuf::from(
+                                        value,
+                                    )))
+                                })
+                                .into_element(),
+                        ]
+                        .spacing(6)
+                        .into()
+                    } else {
+                        row![
+                            text(selected_dir).size(12),
+                            button(bootstrap::folder_plus().size(14))
+                                .on_press(Message::ChooseProjectFolder)
+                                .padding([4, 8])
+                                .style(button::secondary),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::alignment::Vertical::Center)
+                        .into()
+                    };
 
                 path_input
             },
@@ -83,7 +92,12 @@ impl App {
             let selected_label = self
                 .add_form
                 .ssh_service_id
-                .and_then(|id| self.config.ssh_services.iter().find(|service| service.id == id))
+                .and_then(|id| {
+                    self.config
+                        .ssh_services
+                        .iter()
+                        .find(|service| service.id == id)
+                })
                 .map(|service| format!("Selected: {}", service.name))
                 .unwrap_or_else(|| "Select an SSH service".into());
 
@@ -132,48 +146,49 @@ impl App {
     }
 
     pub(crate) fn view_ssh_services_overlay(&self) -> Element<'_, Message> {
-        let services = self
-            .config
-            .ssh_services
-            .iter()
-            .fold(column![].spacing(8), |col, service| {
-                let auth_text = match service.auth {
-                    SshAuth::Password { .. } => "password",
-                    SshAuth::Key { .. } => "key",
-                    SshAuth::Agent => "agent",
-                };
+        let services =
+            self.config
+                .ssh_services
+                .iter()
+                .fold(column![].spacing(8), |col, service| {
+                    let auth_text = match service.auth {
+                        SshAuth::Password { .. } => "password",
+                        SshAuth::Key { .. } => "key",
+                        SshAuth::Agent => "agent",
+                    };
 
-                col.push(
-                    container(
-                        row![
-                            column![
-                                text(&service.name).size(13),
-                                text(format!(
-                                    "{}@{}:{} · {}",
-                                    service.user, service.host, service.port, auth_text
-                                ))
-                                .size(11)
-                                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                    col.push(
+                        container(
+                            row![
+                                column![
+                                    text(&service.name).size(13),
+                                    text(format!(
+                                        "{}@{}:{} · {}",
+                                        service.user, service.host, service.port, auth_text
+                                    ))
+                                    .size(11)
+                                    .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                                ]
+                                .spacing(2)
+                                .width(Length::Fill),
+                                button(bootstrap::pencil().size(10))
+                                    .on_press(Message::EditSshService(service.id))
+                                    .padding([4, 6])
+                                    .style(button::text),
+                                button(bootstrap::trash().size(10))
+                                    .on_press(Message::DeleteSshService(service.id))
+                                    .padding([4, 6])
+                                    .style(button::text),
                             ]
-                            .spacing(2)
-                            .width(Length::Fill),
-                            button(bootstrap::pencil().size(10))
-                                .on_press(Message::EditSshService(service.id))
-                                .padding([4, 6])
-                                .style(button::text),
-                            button(bootstrap::trash().size(10))
-                                .on_press(Message::DeleteSshService(service.id))
-                                .padding([4, 6])
-                                .style(button::text),
-                        ]
-                        .align_y(iced::alignment::Vertical::Center),
+                            .align_y(iced::alignment::Vertical::Center),
+                        )
+                        .padding([8, 10])
+                        .style(|_| {
+                            container::Style::default()
+                                .background(iced::Color::from_rgb(0.18, 0.18, 0.18))
+                        }),
                     )
-                    .padding([8, 10])
-                    .style(|_| {
-                        container::Style::default().background(iced::Color::from_rgb(0.18, 0.18, 0.18))
-                    }),
-                )
-            });
+                });
 
         let auth_row = row![
             button(text("Agent").size(12))
@@ -187,11 +202,13 @@ impl App {
             button(text("Password").size(12))
                 .on_press(Message::SshServiceAuthTypeChanged(SshAuthType::Password))
                 .padding([4, 8])
-                .style(if self.ssh_service_form.auth_type == SshAuthType::Password {
-                    button::primary
-                } else {
-                    button::secondary
-                }),
+                .style(
+                    if self.ssh_service_form.auth_type == SshAuthType::Password {
+                        button::primary
+                    } else {
+                        button::secondary
+                    }
+                ),
             button(text("Key").size(12))
                 .on_press(Message::SshServiceAuthTypeChanged(SshAuthType::Key))
                 .padding([4, 8])
@@ -254,10 +271,18 @@ impl App {
         }
 
         if let Some(error) = &self.ssh_service_form.error {
-            form = form.push(text(error).size(12).color(iced::Color::from_rgb(0.9, 0.35, 0.35)));
+            form = form.push(
+                text(error)
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.9, 0.35, 0.35)),
+            );
         }
 
-        let submit_label = if self.editing_ssh_service.is_some() { "Save" } else { "Add" };
+        let submit_label = if self.editing_ssh_service.is_some() {
+            "Save"
+        } else {
+            "Add"
+        };
         let mut submit_button = Button::new(submit_label).width(Length::Fixed(120.0));
         if self.ssh_service_form.can_submit() {
             submit_button = submit_button.on_press(Message::SubmitSshServiceForm);

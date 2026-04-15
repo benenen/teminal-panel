@@ -118,7 +118,10 @@ pub fn load_remote_entries(
         });
     }
 
-    parse_remote_entries(&String::from_utf8_lossy(&output.stdout), &remote_dir.display().to_string())
+    parse_remote_entries(
+        &String::from_utf8_lossy(&output.stdout),
+        &remote_dir.display().to_string(),
+    )
 }
 
 fn parse_remote_entries(text: &str, base_path: &str) -> Result<Vec<RemoteFileEntry>, String> {
@@ -177,4 +180,3 @@ pub fn parse_remote_entries_for_test(
 ) -> Result<Vec<RemoteFileEntry>, String> {
     parse_remote_entries(text, base_path)
 }
-

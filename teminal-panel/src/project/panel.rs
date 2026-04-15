@@ -1,5 +1,5 @@
-use uuid::Uuid;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProjectConnectionKind {

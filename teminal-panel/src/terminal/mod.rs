@@ -21,7 +21,9 @@ pub fn local_shell_flavor(program: &str) -> LocalShellFlavor {
     }
 }
 
-pub fn local_shell_flavor_for_settings(settings: &iced_term::settings::Settings) -> LocalShellFlavor {
+pub fn local_shell_flavor_for_settings(
+    settings: &iced_term::settings::Settings,
+) -> LocalShellFlavor {
     local_shell_flavor(&settings.backend.program)
 }
 

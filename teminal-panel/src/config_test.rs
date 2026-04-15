@@ -102,7 +102,10 @@ fn config_deserializes_ssh_services() {
     let config = AppConfig::from_compat(compat);
 
     assert_eq!(config.ssh_services.len(), 1);
-    assert!(matches!(config.projects[0].connection, Connection::Ssh { .. }));
+    assert!(matches!(
+        config.projects[0].connection,
+        Connection::Ssh { .. }
+    ));
 }
 
 #[test]
@@ -163,6 +166,8 @@ fn config_path_defaults_to_home_config_directory() {
     let home = dirs::home_dir().expect("home dir");
     assert_eq!(
         path,
-        home.join(".config").join("teminal-panel").join("config.toml")
+        home.join(".config")
+            .join("teminal-panel")
+            .join("config.toml")
     );
 }

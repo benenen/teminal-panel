@@ -73,9 +73,7 @@ impl<'a, Message: Clone + 'a> Modal<'a, Message> {
         container(modal)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_| {
-                container::Style::default().background(Color::from_rgba(0.0, 0.0, 0.0, 0.5))
-            })
+            .style(|_| container::Style::default().background(Color::from_rgba(0.0, 0.0, 0.0, 0.5)))
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .into()

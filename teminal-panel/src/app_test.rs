@@ -1,5 +1,5 @@
-use super::{App, Message, OverlayState, SshAuthType};
 use super::view::terminal::{panel_interaction_mode, PanelInteractionMode};
+use super::{App, Message, OverlayState, SshAuthType};
 use crate::config::AppConfig;
 use crate::project::{panel::ProjectConnectionKind, Connection, SshAuth, SshService};
 use std::path::PathBuf;
@@ -27,6 +27,7 @@ fn test_app() -> App {
         config: AppConfig::default(),
         selected_project: None,
         hovered_project: None,
+        open_project_menu: None,
         expanded_projects: std::collections::HashSet::new(),
         editing_terminal: None,
         add_form: Default::default(),
@@ -118,6 +119,94 @@ fn submit_add_form_requires_valid_directory() {
 }
 
 #[test]
+fn toggle_project_menu_opens_and_closes_selected_project_menu() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+
+    let _ = app.update(Message::ToggleProjectMenu(project_id));
+    assert_eq!(app.open_project_menu, Some(project_id));
+
+    let _ = app.update(Message::ToggleProjectMenu(project_id));
+    assert_eq!(app.open_project_menu, None);
+}
+
+#[test]
+fn toggle_project_menu_switches_open_menu_between_projects() {
+    let mut app = test_app();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+
+    let _ = app.update(Message::ToggleProjectMenu(first));
+    let _ = app.update(Message::ToggleProjectMenu(second));
+
+    assert_eq!(app.open_project_menu, Some(second));
+}
+
+#[test]
+fn hide_project_menu_clears_open_menu_state() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+
+    let _ = app.update(Message::ToggleProjectMenu(project_id));
+    let _ = app.update(Message::HideProjectMenu);
+
+    assert_eq!(app.open_project_menu, None);
+}
+
+#[test]
+fn removing_project_clears_open_project_menu_for_that_project() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+
+        let _ = app.update(Message::AddProject {
+            name: "Local project".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::ToggleProjectMenu(project_id));
+        let _ = app.update(Message::RemoveProject(project_id));
+
+        assert_eq!(app.open_project_menu, None);
+    });
+}
+
+#[test]
+fn opening_overlay_closes_open_project_menu() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+
+    let _ = app.update(Message::ToggleProjectMenu(project_id));
+    let _ = app.update(Message::ShowAddProjectForm);
+
+    assert_eq!(app.open_project_menu, None);
+}
+
+#[test]
+fn opening_settings_menu_closes_open_project_menu() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+
+    let _ = app.update(Message::ToggleProjectMenu(project_id));
+    let _ = app.update(Message::ToggleSettingsMenu);
+
+    assert_eq!(app.open_project_menu, None);
+    assert!(app.settings_menu_open);
+}
+
+#[test]
+fn hover_state_does_not_block_project_menu_toggle() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+
+    let _ = app.update(Message::HoverProject(Some(project_id)));
+    let _ = app.update(Message::ToggleProjectMenu(project_id));
+
+    assert_eq!(app.hovered_project, Some(project_id));
+    assert_eq!(app.open_project_menu, Some(project_id));
+}
+
+#[test]
 fn removing_selected_project_clears_selection() {
     with_temp_config_dir(|workspace_dir: &PathBuf| {
         let mut app = test_app();
@@ -136,6 +225,36 @@ fn removing_selected_project_clears_selection() {
         assert_eq!(app.selected_project, None);
         assert!(AppConfig::load().projects.is_empty());
     });
+}
+
+#[test]
+fn local_git_project_retains_git_repo_flag() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        std::fs::create_dir_all(workspace_dir.join(".git")).expect("create git dir");
+
+        let mut app = test_app();
+        let _ = app.update(Message::AddProject {
+            name: "repo".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        assert!(app.config.projects[0].is_git_repo);
+    });
+}
+
+#[test]
+fn ssh_project_does_not_expose_git_repo_flag() {
+    let service = sample_ssh_service();
+    let mut app = test_app();
+    app.config.ssh_services.push(service.clone());
+    app.add_form.connection_kind = ProjectConnectionKind::Ssh;
+    app.add_form.ssh_service_id = Some(service.id);
+    app.add_form.name = "remote".into();
+    app.add_form.selected_dir = Some(PathBuf::from("/srv/app"));
+
+    let _ = app.update(Message::SubmitAddProjectForm);
+
+    assert!(!app.config.projects[0].is_git_repo);
 }
 
 #[test]
@@ -238,7 +357,10 @@ fn backend_events_do_not_override_user_selected_tab() {
 
         let project_terms = app.terminals.get(&project_id).expect("terminals exist");
         assert_eq!(project_terms.active_index, 0);
-        assert_eq!(project_terms.terminals[1].title.as_deref(), Some("background-shell"));
+        assert_eq!(
+            project_terms.terminals[1].title.as_deref(),
+            Some("background-shell")
+        );
     });
 }
 
@@ -495,7 +617,9 @@ fn submit_add_form_creates_ssh_project_when_service_selected() {
 
         let _ = app.update(Message::ShowAddProjectForm);
         let _ = app.update(Message::FormNameChanged("Remote project".into()));
-        let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+        let _ = app.update(Message::FormConnectionKindChanged(
+            ProjectConnectionKind::Ssh,
+        ));
         let _ = app.update(Message::FormSshServiceSelected(service_id));
         let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
         let _ = app.update(Message::SubmitAddProjectForm);
@@ -519,13 +643,20 @@ fn submit_add_form_creates_ssh_project_for_non_local_remote_path() {
 
         let _ = app.update(Message::ShowAddProjectForm);
         let _ = app.update(Message::FormNameChanged("Remote project".into()));
-        let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+        let _ = app.update(Message::FormConnectionKindChanged(
+            ProjectConnectionKind::Ssh,
+        ));
         let _ = app.update(Message::FormSshServiceSelected(service_id));
-        let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/remote-only"))));
+        let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from(
+            "/srv/remote-only",
+        ))));
         let _ = app.update(Message::SubmitAddProjectForm);
 
         assert_eq!(app.config.projects.len(), 1);
-        assert_eq!(app.config.projects[0].working_dir, PathBuf::from("/srv/remote-only"));
+        assert_eq!(
+            app.config.projects[0].working_dir,
+            PathBuf::from("/srv/remote-only")
+        );
     });
 }
 
@@ -534,7 +665,9 @@ fn choose_project_folder_is_noop_for_ssh_projects() {
     let mut app = test_app();
 
     let _ = app.update(Message::ShowAddProjectForm);
-    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+    let _ = app.update(Message::FormConnectionKindChanged(
+        ProjectConnectionKind::Ssh,
+    ));
     let _ = app.update(Message::ChooseProjectFolder);
 
     assert_eq!(app.add_form.selected_dir, None);
@@ -545,8 +678,12 @@ fn switching_to_ssh_preserves_manual_remote_path() {
     let mut app = test_app();
 
     let _ = app.update(Message::ShowAddProjectForm);
-    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/app"))));
-    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from(
+        "/srv/app",
+    ))));
+    let _ = app.update(Message::FormConnectionKindChanged(
+        ProjectConnectionKind::Ssh,
+    ));
 
     assert_eq!(app.add_form.selected_dir, Some(PathBuf::from("/srv/app")));
 }
@@ -556,9 +693,15 @@ fn switching_back_to_local_clears_non_local_remote_path() {
     let mut app = test_app();
 
     let _ = app.update(Message::ShowAddProjectForm);
-    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/app"))));
-    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
-    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Local));
+    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from(
+        "/srv/app",
+    ))));
+    let _ = app.update(Message::FormConnectionKindChanged(
+        ProjectConnectionKind::Ssh,
+    ));
+    let _ = app.update(Message::FormConnectionKindChanged(
+        ProjectConnectionKind::Local,
+    ));
 
     assert_eq!(app.add_form.selected_dir, None);
 }
@@ -568,8 +711,12 @@ fn project_folder_selected_none_does_not_clear_remote_path() {
     let mut app = test_app();
 
     let _ = app.update(Message::ShowAddProjectForm);
-    let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
-    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from("/srv/app"))));
+    let _ = app.update(Message::FormConnectionKindChanged(
+        ProjectConnectionKind::Ssh,
+    ));
+    let _ = app.update(Message::ProjectFolderSelected(Some(PathBuf::from(
+        "/srv/app",
+    ))));
     let _ = app.update(Message::ProjectFolderSelected(None));
 
     assert_eq!(app.add_form.selected_dir, Some(PathBuf::from("/srv/app")));
@@ -582,7 +729,9 @@ fn submit_add_form_with_ssh_requires_service_selection() {
 
         let _ = app.update(Message::ShowAddProjectForm);
         let _ = app.update(Message::FormNameChanged("Remote project".into()));
-        let _ = app.update(Message::FormConnectionKindChanged(ProjectConnectionKind::Ssh));
+        let _ = app.update(Message::FormConnectionKindChanged(
+            ProjectConnectionKind::Ssh,
+        ));
         let _ = app.update(Message::ProjectFolderSelected(Some(workspace_dir.clone())));
         let _ = app.update(Message::SubmitAddProjectForm);
 
@@ -732,10 +881,7 @@ fn ssh_remote_browse_rejects_password_auth() {
         ..sample_ssh_service()
     };
 
-    let result = crate::ssh::build_remote_list_command(
-        &service,
-        std::path::Path::new("/srv/app"),
-    );
+    let result = crate::ssh::build_remote_list_command(&service, std::path::Path::new("/srv/app"));
 
     assert!(matches!(
         result,
@@ -810,7 +956,10 @@ fn request_remote_files_marks_loading_for_agent_auth() {
         .get(&project_id)
         .and_then(|state| state.remote_files.as_ref())
         .expect("remote file state");
-    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loading));
+    assert!(matches!(
+        state.status,
+        crate::terminal::RemoteFileStatus::Loading
+    ));
 }
 
 #[test]
@@ -865,7 +1014,10 @@ fn remote_files_loaded_updates_entries() {
         .get(&project_id)
         .and_then(|state| state.remote_files.as_ref())
         .expect("remote file state");
-    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loaded));
+    assert!(matches!(
+        state.status,
+        crate::terminal::RemoteFileStatus::Loaded
+    ));
     assert_eq!(state.entries.len(), 1);
 }
 
@@ -889,7 +1041,10 @@ fn selecting_ssh_project_requests_remote_files() {
         .get(&project_id)
         .and_then(|state| state.remote_files.as_ref())
         .expect("remote file state");
-    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loading));
+    assert!(matches!(
+        state.status,
+        crate::terminal::RemoteFileStatus::Loading
+    ));
 }
 
 #[test]
@@ -911,7 +1066,10 @@ fn remote_file_status_message_for_unsupported_state_is_readable() {
     );
     let message = super::remote_file_status_label_for_test(&status);
 
-    assert_eq!(message, Some("Remote browsing supports SSH agent/key auth only"));
+    assert_eq!(
+        message,
+        Some("Remote browsing supports SSH agent/key auth only")
+    );
 }
 
 #[test]
@@ -1089,7 +1247,10 @@ fn selecting_ssh_project_does_not_reload_existing_remote_files() {
         .get(&project_id)
         .and_then(|state| state.remote_files.as_ref())
         .expect("remote file state");
-    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Loaded));
+    assert!(matches!(
+        state.status,
+        crate::terminal::RemoteFileStatus::Loaded
+    ));
     assert_eq!(state.entries.len(), 1);
 }
 
@@ -1097,7 +1258,8 @@ fn selecting_ssh_project_does_not_reload_existing_remote_files() {
 fn remote_files_loaded_error_sets_error_state() {
     let mut app = test_app();
     let project_id = Uuid::new_v4();
-    app.terminals.insert(project_id, crate::terminal::ProjectTerminals::new());
+    app.terminals
+        .insert(project_id, crate::terminal::ProjectTerminals::new());
 
     let _ = app.update(Message::RemoteFilesLoaded {
         project_id,
@@ -1109,7 +1271,10 @@ fn remote_files_loaded_error_sets_error_state() {
         .get(&project_id)
         .and_then(|state| state.remote_files.as_ref())
         .expect("remote file state");
-    assert!(matches!(state.status, crate::terminal::RemoteFileStatus::Error(_)));
+    assert!(matches!(
+        state.status,
+        crate::terminal::RemoteFileStatus::Error(_)
+    ));
 }
 
 #[test]

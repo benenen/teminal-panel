@@ -65,7 +65,11 @@ impl App {
             .into()
     }
 
-    pub(crate) fn view_empty_project<'a>(&self, project_id: Uuid, name: &str) -> Element<'a, Message> {
+    pub(crate) fn view_empty_project<'a>(
+        &self,
+        project_id: Uuid,
+        name: &str,
+    ) -> Element<'a, Message> {
         container(
             column![
                 bootstrap::terminal_plus()
@@ -129,14 +133,13 @@ impl App {
                             iced::Color::from_rgba(0.0, 0.0, 0.0, 0.38)
                         };
 
-                        let term_view = iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal);
+                        let term_view =
+                            iced_term::TerminalView::show(&ts.terminal).map(Message::Terminal);
                         let overlay: Element<'_, Message> = match interaction_mode {
                             PanelInteractionMode::Direct => container(text(""))
                                 .width(Length::Fill)
                                 .height(Length::Fill)
-                                .style(move |_| {
-                                    container::Style::default().background(dim_overlay)
-                                })
+                                .style(move |_| container::Style::default().background(dim_overlay))
                                 .into(),
                             PanelInteractionMode::ClickToActivate => mouse_area(
                                 container(text(""))
@@ -169,7 +172,7 @@ impl App {
                                             radius: 0.into(),
                                         })
                                 })
-                                .padding(0)
+                                .padding(0),
                         )
                     })
                     .spacing(6);
@@ -217,19 +220,13 @@ impl App {
             .spacing(6)
             .align_y(iced::alignment::Vertical::Center);
 
-            tabs = tabs.push(
-                container(tab_label)
-                    .padding([6, 12])
-                    .style(move |_| {
-                        if is_active {
-                            container::Style::default()
-                                .background(iced::Color::from_rgb(0.18, 0.24, 0.36))
-                        } else {
-                            container::Style::default()
-                                .background(iced::Color::from_rgb(0.16, 0.16, 0.16))
-                        }
-                    }),
-            );
+            tabs = tabs.push(container(tab_label).padding([6, 12]).style(move |_| {
+                if is_active {
+                    container::Style::default().background(iced::Color::from_rgb(0.18, 0.24, 0.36))
+                } else {
+                    container::Style::default().background(iced::Color::from_rgb(0.16, 0.16, 0.16))
+                }
+            }));
         }
 
         let add_tab = button(bootstrap::plus_lg().size(12))

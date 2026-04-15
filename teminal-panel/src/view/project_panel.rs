@@ -40,9 +40,12 @@ impl App {
             };
 
             let project_button = button(
-                row![project_icon, text(&project.name).size(13).color(label_color),]
-                    .spacing(6)
-                    .align_y(iced::alignment::Vertical::Center),
+                row![
+                    project_icon,
+                    text(&project.name).size(13).color(label_color),
+                ]
+                .spacing(6)
+                .align_y(iced::alignment::Vertical::Center),
             )
             .width(Length::Fill)
             .style(button::text)
@@ -51,6 +54,11 @@ impl App {
 
             let chevron_btn = button(chevron)
                 .on_press(Message::ToggleProjectExpanded(project.id))
+                .padding([4, 4])
+                .style(button::text);
+
+            let menu_button = button(bootstrap::three_dots_vertical().size(10))
+                .on_press(Message::ToggleProjectMenu(project.id))
                 .padding([4, 4])
                 .style(button::text);
 
@@ -64,7 +72,7 @@ impl App {
                 container(text(" ").size(10)).padding([4, 4]).into()
             };
 
-            let row_content = row![chevron_btn, project_button, close_btn,]
+            let row_content = row![chevron_btn, project_button, menu_button, close_btn,]
                 .spacing(2)
                 .align_y(iced::alignment::Vertical::Center);
 
@@ -111,7 +119,8 @@ impl App {
                     .get(&project.id)
                     .and_then(|project_terms| project_terms.remote_files.as_ref())
                 {
-                    if let Some(label) = crate::app::remote_file_status_label(&remote_files.status) {
+                    if let Some(label) = crate::app::remote_file_status_label(&remote_files.status)
+                    {
                         project_col = project_col.push(
                             container(
                                 text(label)
@@ -127,7 +136,10 @@ impl App {
                         );
                     }
 
-                    if matches!(remote_files.status, crate::terminal::RemoteFileStatus::Loaded) {
+                    if matches!(
+                        remote_files.status,
+                        crate::terminal::RemoteFileStatus::Loaded
+                    ) {
                         for entry in remote_files.entries.iter().take(40) {
                             let icon = if entry.is_dir {
                                 bootstrap::folder().size(10)
@@ -160,7 +172,9 @@ impl App {
 
                         let name_field: Element<'_, Message> = if is_editing {
                             text_input("Terminal name", &ts.name)
-                                .on_input(move |value| Message::RenameTerminal(project.id, i, value))
+                                .on_input(move |value| {
+                                    Message::RenameTerminal(project.id, i, value)
+                                })
                                 .on_submit(Message::FinishRenameTerminal)
                                 .padding([2, 6])
                                 .size(11)
@@ -216,9 +230,10 @@ impl App {
                     }
                 }
 
-                let add_term_row = row![bootstrap::plus_lg().size(11), text("New Terminal").size(11),]
-                    .spacing(4)
-                    .align_y(iced::alignment::Vertical::Center);
+                let add_term_row =
+                    row![bootstrap::plus_lg().size(11), text("New Terminal").size(11),]
+                        .spacing(4)
+                        .align_y(iced::alignment::Vertical::Center);
 
                 project_col = project_col.push(
                     button(add_term_row)
@@ -250,12 +265,10 @@ impl App {
         .align_y(iced::alignment::Vertical::Center);
 
         let footer_button = container(
-            row![
-                button(bootstrap::gear().size(14))
-                    .on_press(Message::ToggleSettingsMenu)
-                    .padding([6, 8])
-                    .style(button::text)
-            ]
+            row![button(bootstrap::gear().size(14))
+                .on_press(Message::ToggleSettingsMenu)
+                .padding([6, 8])
+                .style(button::text)]
             .align_y(iced::alignment::Vertical::Center),
         )
         .width(Length::Fill)
@@ -264,22 +277,18 @@ impl App {
 
         let footer: Element<'_, Message> = if self.settings_menu_open {
             let menu = ContextMenu::new(
-                column![
-                    button(text("SSH Service Settings").size(12))
-                        .width(Length::Fill)
-                        .on_press(Message::ShowSshServices)
-                        .padding([6, 8])
-                        .style(button::text),
-                ]
+                column![button(text("SSH Service Settings").size(12))
+                    .width(Length::Fill)
+                    .on_press(Message::ShowSshServices)
+                    .padding([6, 8])
+                    .style(button::text),]
                 .spacing(4)
                 .into(),
             )
             .into_element();
 
             iced::widget::stack![
-                mouse_area(container(text(""))
-                    .width(Length::Fill)
-                    .height(Length::Fill))
+                mouse_area(container(text("")).width(Length::Fill).height(Length::Fill))
                     .on_press(Message::HideSettingsMenu),
                 container(
                     column![
@@ -313,7 +322,9 @@ impl App {
             column![
                 container(header).padding([8, 10]),
                 scrollable(project_list.spacing(2).padding([0, 6])).height(Length::Fill),
-                container(footer).padding([8, 10]).height(Length::Fixed(96.0)),
+                container(footer)
+                    .padding([8, 10])
+                    .height(Length::Fixed(96.0)),
             ]
             .spacing(0),
         )

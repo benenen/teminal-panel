@@ -37,7 +37,12 @@ impl SshService {
         if self.port == 22 {
             format!("{}:{}", self.display_destination(), path.display())
         } else {
-            format!("{}:{}:{}", self.display_destination(), self.port, path.display())
+            format!(
+                "{}:{}:{}",
+                self.display_destination(),
+                self.port,
+                path.display()
+            )
         }
     }
 }
@@ -45,7 +50,9 @@ impl SshService {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SshAuth {
-    Password { password: String },
+    Password {
+        password: String,
+    },
     Key {
         path: PathBuf,
         passphrase: Option<String>,
