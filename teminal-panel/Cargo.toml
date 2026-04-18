@@ -13,3 +13,4 @@ dirs = "6"
 rfd = "0.17.2"
 iced_fonts = { version = "0.3", features = ["bootstrap"] }
 iced_term = { git = "https://github.com/benenen/iced_term", branch = "teminal-panel" }
+git2 = "0.19"
