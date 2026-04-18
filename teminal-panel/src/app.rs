@@ -71,6 +71,7 @@ pub enum Message {
         result: Result<Vec<RemoteFileEntry>, String>,
     },
     OpenTerminal(Uuid),
+    OpenGitWindow(Uuid),
     ToggleProjectExpanded(Uuid),
     SelectTab(Uuid, usize),
     CloseTab(Uuid, usize),
@@ -485,6 +486,25 @@ impl App {
                             eprintln!("Failed to create terminal: {e}");
                         }
                     }
+                }
+            }
+            Message::OpenGitWindow(project_id) => {
+                if let Some(project) = self.config.projects.iter().find(|p| p.id == project_id) {
+                    if !project.is_git_repo {
+                        return Task::none();
+                    }
+
+                    let (_git_window, task) = crate::git_window::GitWindow::new(
+                        project.id,
+                        project.name.clone(),
+                        project.working_dir.clone(),
+                    );
+
+                    println!("Opening git window for project: {}", project.name);
+
+                    return task.map(move |_| Message::OpenGitWindow(project_id));
+                } else {
+                    return Task::none();
                 }
             }
             Message::ToggleProjectExpanded(id) => {
