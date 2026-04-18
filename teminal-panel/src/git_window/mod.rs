@@ -22,7 +22,11 @@ pub enum Message {
 }
 
 impl GitWindow {
-    pub fn new(project_id: Uuid, project_name: String, repo_path: PathBuf) -> (Self, Task<Message>) {
+    pub fn new(
+        project_id: Uuid,
+        project_name: String,
+        repo_path: PathBuf,
+    ) -> (Self, Task<Message>) {
         let file_changes = match get_file_changes(&repo_path) {
             Ok(changes) => changes,
             Err(e) => {
@@ -64,8 +68,8 @@ impl GitWindow {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        use iced::Alignment;
         use iced::widget::{column, container, row, scrollable, text};
+        use iced::Alignment;
 
         if let Some(error) = &self.error {
             return container(text(error).size(14).color(theme::TEXT_SECONDARY))
@@ -76,8 +80,10 @@ impl GitWindow {
                 .into();
         }
 
-        let (unstaged, staged): (Vec<_>, Vec<_>) =
-            self.file_changes.iter().partition(|file_change| !file_change.staged);
+        let (unstaged, staged): (Vec<_>, Vec<_>) = self
+            .file_changes
+            .iter()
+            .partition(|file_change| !file_change.staged);
 
         let mut content = column![].spacing(16).padding(20);
 
@@ -116,9 +122,7 @@ impl GitWindow {
         }
 
         if !staged.is_empty() {
-            let header = text("STAGED CHANGES")
-                .size(12)
-                .color(theme::TEXT_TERTIARY);
+            let header = text("STAGED CHANGES").size(12).color(theme::TEXT_TERTIARY);
 
             let mut file_list = column![].spacing(2);
             for file_change in staged {
