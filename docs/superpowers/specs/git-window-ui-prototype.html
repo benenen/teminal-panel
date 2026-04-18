@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git Window - UI Design Prototype</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* 深色主题 - 技术美学 */
+            --bg-primary: #0a0e14;
+            --bg-secondary: #0f1419;
+            --bg-tertiary: #151a21;
+            --bg-elevated: #1a1f28;
+
+            /* 边框和分隔 */
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --border-medium: rgba(255, 255, 255, 0.1);
+            --border-accent: rgba(88, 166, 255, 0.3);
+
+            /* 文本颜色 */
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-tertiary: #6e7681;
+            --text-accent: #58a6ff;
+
+            /* Git 状态颜色 */
+            --git-added: #3fb950;
+            --git-modified: #d29922;
+            --git-deleted: #f85149;
+            --git-staged: #58a6ff;
+
+            /* 分支颜色 */
+            --branch-1: #58a6ff;
+            --branch-2: #3fb950;
+            --branch-3: #d29922;
+            --branch-4: #bc8cff;
+            --branch-5: #ff7b72;
+
+            /* 阴影 */
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+            /* 动画 */
+            --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* 主容器 */
+        .git-window {
+            display: flex;
+            height: 100vh;
+            background: var(--bg-primary);
+            position: relative;
+        }
+
+        /* 背景装饰 */
+        .git-window::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 300px;
+            background: radial-gradient(ellipse at top, rgba(88, 166, 255, 0.08) 0%, transparent 60%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* 左侧面板 */
+        .sidebar {
+            width: 320px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            z-index: 1;
+        }
+
+        .sidebar-header {
+            padding: 20px 20px 16px;
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--bg-tertiary);
+        }
+
+        .sidebar-title {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+
+        .repo-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--bg-elevated);
+            border-radius: 8px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .repo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--branch-1), var(--branch-4));
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .repo-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .repo-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .repo-branch {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 2px;
+        }
+
+        /* 文件列表 */
+        .file-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 12px;
+        }
+
+        .file-section {
+            margin-bottom: 24px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 8px 8px 12px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+        }
+
+        .section-count {
+            margin-left: auto;
+            background: var(--bg-elevated);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            margin-bottom: 2px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .file-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: currentColor;
+            opacity: 0;
+            transition: opacity var(--transition-fast);
+        }
+
+        .file-item:hover {
+            background: var(--bg-elevated);
+        }
+
+        .file-item.active {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-accent);
+        }
+
+        .file-item.active::before {
+            opacity: 1;
+        }
+
+        .file-status-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .file-item.added { color: var(--git-added); }
+        .file-item.added .file-status-icon {
+            background: rgba(63, 185, 80, 0.15);
+            color: var(--git-added);
+        }
+
+        .file-item.modified { color: var(--git-modified); }
+        .file-item.modified .file-status-icon {
+            background: rgba(210, 153, 34, 0.15);
+            color: var(--git-modified);
+        }
+
+        .file-item.deleted { color: var(--git-deleted); }
+        .file-item.deleted .file-status-icon {
+            background: rgba(248, 81, 73, 0.15);
+            color: var(--git-deleted);
+        }
+
+        .file-item.staged { color: var(--git-staged); }
+        .file-item.staged .file-status-icon {
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--git-staged);
+        }
+
+        .file-path {
+            flex: 1;
+            font-size: 13px;
+            font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        /* 右侧主内容区 */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Tab 栏 */
+        .tab-bar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-subtle);
+            overflow-x: auto;
+        }
+
+        .tab {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            background: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            white-space: nowrap;
+            position: relative;
+        }
+
+        .tab:hover {
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: var(--bg-elevated);
+            color: var(--text-accent);
+            border-color: var(--border-accent);
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -13px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--text-accent);
+        }
+
+        .tab-icon {
+            font-size: 14px;
+        }
+
+        .tab-close {
+            margin-left: 4px;
+            padding: 2px;
+            border-radius: 3px;
+            opacity: 0.6;
+            transition: all var(--transition-fast);
+        }
+
+        .tab-close:hover {
+            opacity: 1;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* 内容区域 */
+        .content-area {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Git Graph */
+        .git-graph {
+            height: 100%;
+            padding: 24px;
+            overflow-y: auto;
+            background: var(--bg-primary);
+        }
+
+        .graph-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .commit-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            padding: 12px 0;
+            position: relative;
+            animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) backwards;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .commit-row:nth-child(1) { animation-delay: 0ms; }
+        .commit-row:nth-child(2) { animation-delay: 50ms; }
+        .commit-row:nth-child(3) { animation-delay: 100ms; }
+        .commit-row:nth-child(4) { animation-delay: 150ms; }
+        .commit-row:nth-child(5) { animation-delay: 200ms; }
+
+        .graph-column {
+            width: 120px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .graph-line {
+            width: 3px;
+            height: 100%;
+            background: var(--branch-1);
+            border-radius: 2px;
+        }
+
+        .commit-node {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--branch-1);
+            border: 2px solid var(--bg-primary);
+            box-shadow: 0 0 0 2px var(--branch-1);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 2;
+        }
+
+        .commit-node.branch-2 {
+            background: var(--branch-2);
+            box-shadow: 0 0 0 2px var(--branch-2);
+        }
+
+        .commit-node.branch-3 {
+            background: var(--branch-3);
+            box-shadow: 0 0 0 2px var(--branch-3);
+        }
+
+        .commit-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .commit-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 6px;
+        }
+
+        .commit-message {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .commit-hash {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-tertiary);
+            background: var(--bg-elevated);
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .commit-meta {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .commit-author {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .author-avatar {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--branch-1), var(--branch-4));
+        }
+
+        .commit-time {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .branch-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--branch-1);
+            border: 1px solid rgba(88, 166, 255, 0.3);
+        }
+
+        /* Diff 视图 */
+        .diff-view {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-primary);
+        }
+
+        .diff-header {
+            padding: 20px 24px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .diff-file-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .diff-stats {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .diff-stat {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .diff-content {
+            flex: 1;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .diff-line {
+            display: flex;
+            padding: 0 24px;
+        }
+
+        .line-number {
+            width: 50px;
+            text-align: right;
+            color: var(--text-tertiary);
+            user-select: none;
+            padding-right: 16px;
+        }
+
+        .line-content {
+            flex: 1;
+            white-space: pre;
+        }
+
+        .diff-line.added {
+            background: rgba(63, 185, 80, 0.1);
+            color: var(--git-added);
+        }
+
+        .diff-line.deleted {
+            background: rgba(248, 81, 73, 0.1);
+            color: var(--git-deleted);
+        }
+
+        /* 滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-elevated);
+            border-radius: 5px;
+            border: 2px solid var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="git-window">
+        <!-- 左侧边栏 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">Repository</div>
+                <div class="repo-info">
+                    <div class="repo-icon">📦</div>
+                    <div class="repo-details">
+                        <div class="repo-name">teminal-panel</div>
+                        <div class="repo-branch">main</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="file-list">
+                <div class="file-section">
+                    <div class="section-header">
+                        <span>Unstaged Changes</span>
+                        <span class="section-count">3</span>
+                    </div>
+                    <div class="file-item modified active">
+                        <div class="file-status-icon">M</div>
+                        <div class="file-path">src/app.rs</div>
+                    </div>
+                    <div class="file-item added">
+                        <div class="file-status-icon">A</div>
+                        <div class="file-path">src/git_window/mod.rs</div>
+                    </div>
+                    <div class="file-item modified">
+                        <div class="file-status-icon">M</div>
+                        <div class="file-path">Cargo.toml</div>
+                    </div>
+                </div>
+
+                <div class="file-section">
+                    <div class="section-header">
+                        <span>Staged Changes</span>
+                        <span class="section-count">2</span>
+                    </div>
+                    <div class="file-item staged">
+                        <div class="file-status-icon">S</div>
+                        <div class="file-path">src/config.rs</div>
+                    </div>
+                    <div class="file-item deleted">
+                        <div class="file-status-icon">D</div>
+                        <div class="file-path">src/old_module.rs</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧主内容 -->
+        <div class="main-content">
+            <div class="tab-bar">
+                <div class="tab active">
+                    <span class="tab-icon">🌳</span>
+                    <span>Git Graph</span>
+                </div>
+                <div class="tab">
+                    <span class="tab-icon">📄</span>
+                    <span>app.rs</span>
+                    <span class="tab-close">×</span>
+                </div>
+                <div class="tab">
+                    <span class="tab-icon">📄</span>
+                    <span>mod.rs</span>
+                    <span class="tab-close">×</span>
+                </div>
+            </div>
+
+            <div class="content-area">
+                <div class="git-graph">
+                    <div class="graph-container">
+                        <div class="commit-row">
+                            <div class="graph-column">
+                                <div class="commit-node"></div>
+                            </div>
+                            <div class="commit-info">
+                                <div class="commit-header">
+                                    <div class="commit-message">feat: add git window with graph visualization</div>
+                                    <div class="commit-hash">a674275</div>
+                                    <div class="branch-label">
+                                        <span>🌿</span>
+                                        <span>main</span>
+                                    </div>
+                                </div>
+                                <div class="commit-meta">
+                                    <div class="commit-author">
+                                        <div class="author-avatar"></div>
+                                        <span>shiben</span>
+                                    </div>
+                                    <div class="commit-time">2 hours ago</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="commit-row">
+                            <div class="graph-column">
+                                <div class="commit-node"></div>
+                            </div>
+                            <div class="commit-info">
+                                <div class="commit-header">
+                                    <div class="commit-message">docs: add git window design spec</div>
+                                    <div class="commit-hash">f394b63</div>
+                                </div>
+                                <div class="commit-meta">
+                                    <div class="commit-author">
+                                        <div class="author-avatar"></div>
+                                        <span>shiben</span>
+                                    </div>
+                                    <div class="commit-time">3 hours ago</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="commit-row">
+                            <div class="graph-column">
+                                <div class="commit-node branch-2"></div>
+                            </div>
+                            <div class="commit-info">
+                                <div class="commit-header">
+                                    <div class="commit-message">test: remove project menu tests</div>
+                                    <div class="commit-hash">d76df05</div>
+                                </div>
+                                <div class="commit-meta">
+                                    <div class="commit-author">
+                                        <div class="author-avatar"></div>
+                                        <span>shiben</span>
+                                    </div>
+                                    <div class="commit-time">5 hours ago</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="commit-row">
+                            <div class="graph-column">
+                                <div class="commit-node branch-2"></div>
+                            </div>
+                            <div class="commit-info">
+                                <div class="commit-header">
+                                    <div class="commit-message">refactor: remove project menu button and state</div>
+                                    <div class="commit-hash">f8db305</div>
+                                </div>
+                                <div class="commit-meta">
+                                    <div class="commit-author">
+                                        <div class="author-avatar"></div>
+                                        <span>shiben</span>
+                                    </div>
+                                    <div class="commit-time">6 hours ago</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="commit-row">
+                            <div class="graph-column">
+                                <div class="commit-node branch-3"></div>
+                            </div>
+                            <div class="commit-info">
+                                <div class="commit-header">
+                                    <div class="commit-message">docs: add spec for removing project more button</div>
+                                    <div class="commit-hash">bb6b5cc</div>
+                                </div>
+                                <div class="commit-meta">
+                                    <div class="commit-author">
+                                        <div class="author-avatar"></div>
+                                        <span>shiben</span>
+                                    </div>
+                                    <div class="commit-time">1 day ago</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
