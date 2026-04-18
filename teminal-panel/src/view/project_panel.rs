@@ -57,11 +57,6 @@ impl App {
                 .padding([4, 4])
                 .style(button::text);
 
-            let menu_button = button(bootstrap::three_dots_vertical().size(10))
-                .on_press(Message::ToggleProjectMenu(project.id))
-                .padding([4, 4])
-                .style(button::text);
-
             let close_btn: Element<'_, Message> = if show_close {
                 button(bootstrap::x_lg().size(10))
                     .on_press(Message::RemoveProject(project.id))
@@ -72,7 +67,7 @@ impl App {
                 container(text(" ").size(10)).padding([4, 4]).into()
             };
 
-            let row_content = row![chevron_btn, project_button, menu_button, close_btn,]
+            let row_content = row![chevron_btn, project_button, close_btn,]
                 .spacing(2)
                 .align_y(iced::alignment::Vertical::Center);
 

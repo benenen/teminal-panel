@@ -7,10 +7,7 @@ use crate::terminal::{
     settings_for_working_dir, DisplayMode, ProjectTerminals, RemoteFileEntry, RemoteFileState,
     RemoteFileStatus, TerminalState,
 };
-use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Element, Length, Padding, Task, Theme};
-use iced_fonts::bootstrap;
-use teminal_ui::components::ContextMenu;
+use iced::{Element, Task, Theme};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -22,7 +19,6 @@ pub struct App {
     pub config: AppConfig,
     pub selected_project: Option<Uuid>,
     pub hovered_project: Option<Uuid>,
-    pub open_project_menu: Option<Uuid>,
     pub expanded_projects: HashSet<Uuid>,
     pub editing_terminal: Option<(Uuid, usize)>,
     pub add_form: AddProjectForm,
@@ -44,8 +40,6 @@ pub enum Message {
     },
     RemoveProject(Uuid),
     HoverProject(Option<Uuid>),
-    ToggleProjectMenu(Uuid),
-    HideProjectMenu,
     ShowAddProjectForm,
     HideAddProjectForm,
     FormNameChanged(String),
@@ -136,7 +130,6 @@ impl App {
                 config: AppConfig::load(),
                 selected_project: None,
                 hovered_project: None,
-                open_project_menu: None,
                 expanded_projects: HashSet::new(),
                 editing_terminal: None,
                 add_form: Default::default(),
@@ -172,30 +165,15 @@ impl App {
                 if self.hovered_project == Some(id) {
                     self.hovered_project = None;
                 }
-                if self.open_project_menu == Some(id) {
-                    self.open_project_menu = None;
-                }
 
                 self.config.save();
             }
             Message::HoverProject(id) => {
                 self.hovered_project = id;
             }
-            Message::ToggleProjectMenu(id) => {
-                self.settings_menu_open = false;
-                self.open_project_menu = if self.open_project_menu == Some(id) {
-                    None
-                } else {
-                    Some(id)
-                };
-            }
-            Message::HideProjectMenu => {
-                self.open_project_menu = None;
-            }
             Message::ShowAddProjectForm => {
                 self.add_form = Default::default();
                 self.settings_menu_open = false;
-                self.open_project_menu = None;
                 self.overlay = Some(OverlayState::AddProject);
             }
             Message::HideAddProjectForm => {
@@ -265,7 +243,6 @@ impl App {
                 }
             }
             Message::ToggleSettingsMenu => {
-                self.open_project_menu = None;
                 self.settings_menu_open = !self.settings_menu_open;
             }
             Message::HideSettingsMenu => {
@@ -274,7 +251,6 @@ impl App {
             Message::ShowSshServices => {
                 self.add_form = Default::default();
                 self.settings_menu_open = false;
-                self.open_project_menu = None;
                 self.overlay = Some(OverlayState::SshServices);
                 self.editing_ssh_service = None;
                 self.ssh_service_form = Default::default();
@@ -282,7 +258,6 @@ impl App {
             Message::HideOverlay => {
                 self.overlay = None;
                 self.settings_menu_open = false;
-                self.open_project_menu = None;
                 self.editing_ssh_service = None;
                 self.ssh_service_form = Default::default();
             }
@@ -650,72 +625,6 @@ impl App {
             .padding(0);
 
         let mut layers: Vec<Element<'_, Message>> = vec![main_content.into()];
-
-        if let Some(project_id) = self.open_project_menu {
-            if let Some(project) = self
-                .config
-                .projects
-                .iter()
-                .find(|project| project.id == project_id)
-            {
-                let items = if project.is_git_repo {
-                    column![]
-                        .push(
-                            button(
-                                row![bootstrap::git().size(12), text("Git").size(12)]
-                                    .spacing(6)
-                                    .align_y(iced::alignment::Vertical::Center),
-                            )
-                            .width(Length::Fill)
-                            .style(button::text)
-                            .padding([6, 8]),
-                        )
-                        .spacing(4)
-                        .into()
-                } else {
-                    column![]
-                        .push(
-                            text("No actions")
-                                .size(11)
-                                .color(iced::Color::from_rgb(0.55, 0.55, 0.55)),
-                        )
-                        .spacing(4)
-                        .into()
-                };
-
-                let project_index = self
-                    .config
-                    .projects
-                    .iter()
-                    .position(|project| project.id == project_id)
-                    .unwrap_or(0);
-                let row_top = 44.0 + project_index as f32 * 30.0;
-
-                let menu_overlay: Element<'_, Message> = iced::widget::stack![
-                    mouse_area(container(text(""))
-                        .width(Length::Fill)
-                        .height(Length::Fill))
-                    .on_press(Message::HideProjectMenu),
-                    container(
-                        ContextMenu::new(items)
-                            .width(Length::Fixed(160.0))
-                            .into_element()
-                    )
-                    .padding(Padding {
-                        top: row_top + 18.0,
-                        right: 12.0,
-                        bottom: 0.0,
-                        left: 0.0,
-                    })
-                    .width(Length::Fixed(220.0))
-                    .height(Length::Fill)
-                    .align_right(Length::Shrink)
-                ]
-                .into();
-
-                layers.push(menu_overlay);
-            }
-        }
 
         if let Some(overlay) = self.overlay {
             let overlay_view = match overlay {

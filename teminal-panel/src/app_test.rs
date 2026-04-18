@@ -1,4 +1,6 @@
-use super::view::terminal::{panel_interaction_mode, PanelInteractionMode};
+use super::view::terminal::{
+    panel_interaction_mode, terminal_footer_label, terminal_footer_model, PanelInteractionMode,
+};
 use super::{App, Message, OverlayState, SshAuthType};
 use crate::config::AppConfig;
 use crate::project::{panel::ProjectConnectionKind, Connection, SshAuth, SshService};
@@ -27,7 +29,6 @@ fn test_app() -> App {
         config: AppConfig::default(),
         selected_project: None,
         hovered_project: None,
-        open_project_menu: None,
         expanded_projects: std::collections::HashSet::new(),
         editing_terminal: None,
         add_form: Default::default(),
@@ -116,94 +117,6 @@ fn submit_add_form_requires_valid_directory() {
         assert_eq!(app.overlay, Some(OverlayState::AddProject));
         assert!(AppConfig::load().projects.is_empty());
     });
-}
-
-#[test]
-fn toggle_project_menu_opens_and_closes_selected_project_menu() {
-    let mut app = test_app();
-    let project_id = Uuid::new_v4();
-
-    let _ = app.update(Message::ToggleProjectMenu(project_id));
-    assert_eq!(app.open_project_menu, Some(project_id));
-
-    let _ = app.update(Message::ToggleProjectMenu(project_id));
-    assert_eq!(app.open_project_menu, None);
-}
-
-#[test]
-fn toggle_project_menu_switches_open_menu_between_projects() {
-    let mut app = test_app();
-    let first = Uuid::new_v4();
-    let second = Uuid::new_v4();
-
-    let _ = app.update(Message::ToggleProjectMenu(first));
-    let _ = app.update(Message::ToggleProjectMenu(second));
-
-    assert_eq!(app.open_project_menu, Some(second));
-}
-
-#[test]
-fn hide_project_menu_clears_open_menu_state() {
-    let mut app = test_app();
-    let project_id = Uuid::new_v4();
-
-    let _ = app.update(Message::ToggleProjectMenu(project_id));
-    let _ = app.update(Message::HideProjectMenu);
-
-    assert_eq!(app.open_project_menu, None);
-}
-
-#[test]
-fn removing_project_clears_open_project_menu_for_that_project() {
-    with_temp_config_dir(|workspace_dir: &PathBuf| {
-        let mut app = test_app();
-
-        let _ = app.update(Message::AddProject {
-            name: "Local project".into(),
-            working_dir: workspace_dir.display().to_string(),
-        });
-
-        let project_id = app.config.projects[0].id;
-        let _ = app.update(Message::ToggleProjectMenu(project_id));
-        let _ = app.update(Message::RemoveProject(project_id));
-
-        assert_eq!(app.open_project_menu, None);
-    });
-}
-
-#[test]
-fn opening_overlay_closes_open_project_menu() {
-    let mut app = test_app();
-    let project_id = Uuid::new_v4();
-
-    let _ = app.update(Message::ToggleProjectMenu(project_id));
-    let _ = app.update(Message::ShowAddProjectForm);
-
-    assert_eq!(app.open_project_menu, None);
-}
-
-#[test]
-fn opening_settings_menu_closes_open_project_menu() {
-    let mut app = test_app();
-    let project_id = Uuid::new_v4();
-
-    let _ = app.update(Message::ToggleProjectMenu(project_id));
-    let _ = app.update(Message::ToggleSettingsMenu);
-
-    assert_eq!(app.open_project_menu, None);
-    assert!(app.settings_menu_open);
-}
-
-#[test]
-fn hover_state_does_not_block_project_menu_toggle() {
-    let mut app = test_app();
-    let project_id = Uuid::new_v4();
-
-    let _ = app.update(Message::HoverProject(Some(project_id)));
-    let _ = app.update(Message::ToggleProjectMenu(project_id));
-
-    assert_eq!(app.hovered_project, Some(project_id));
-    assert_eq!(app.open_project_menu, Some(project_id));
 }
 
 #[test]
@@ -371,6 +284,36 @@ fn inactive_panel_clicks_activate_panel_before_terminal_interaction() {
         PanelInteractionMode::ClickToActivate
     );
     assert_eq!(panel_interaction_mode(true), PanelInteractionMode::Direct);
+}
+
+#[test]
+fn terminal_footer_label_in_tabs_mode_uses_terminal_count() {
+    let label = terminal_footer_label(crate::terminal::DisplayMode::Tabs, 3);
+
+    assert_eq!(label, "Tabs mode · 3 terminals");
+}
+
+#[test]
+fn terminal_footer_label_in_panel_mode_uses_terminal_count() {
+    let label = terminal_footer_label(crate::terminal::DisplayMode::Panel, 2);
+
+    assert_eq!(label, "Panel mode · 2 terminals");
+}
+
+#[test]
+fn terminal_footer_model_shows_git_icon_for_git_projects() {
+    let footer = terminal_footer_model(crate::terminal::DisplayMode::Tabs, 3, true);
+
+    assert!(footer.show_git_icon);
+    assert_eq!(footer.label, "Tabs mode · 3 terminals");
+}
+
+#[test]
+fn terminal_footer_model_hides_git_icon_for_non_git_projects() {
+    let footer = terminal_footer_model(crate::terminal::DisplayMode::Panel, 2, false);
+
+    assert!(!footer.show_git_icon);
+    assert_eq!(footer.label, "Panel mode · 2 terminals");
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use crate::app::{App, Message};
-use crate::terminal::ProjectTerminals;
+use crate::terminal::{DisplayMode, ProjectTerminals};
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text};
 use iced::{Element, Length};
 use iced_fonts::bootstrap;
@@ -20,6 +20,37 @@ pub(crate) fn panel_interaction_mode(is_active: bool) -> PanelInteractionMode {
     }
 }
 
+pub(crate) fn terminal_footer_label(display_mode: DisplayMode, terminal_count: usize) -> String {
+    let mode_label = match display_mode {
+        DisplayMode::Tabs => "Tabs mode",
+        DisplayMode::Panel => "Panel mode",
+    };
+    let terminal_label = if terminal_count == 1 {
+        "terminal"
+    } else {
+        "terminals"
+    };
+
+    format!("{mode_label} · {terminal_count} {terminal_label}")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TerminalFooterModel {
+    pub label: String,
+    pub show_git_icon: bool,
+}
+
+pub(crate) fn terminal_footer_model(
+    display_mode: DisplayMode,
+    terminal_count: usize,
+    is_git_repo: bool,
+) -> TerminalFooterModel {
+    TerminalFooterModel {
+        label: terminal_footer_label(display_mode, terminal_count),
+        show_git_icon: is_git_repo,
+    }
+}
+
 impl App {
     pub(crate) fn view_terminal_area(&self) -> Element<'_, Message> {
         let content = if let Some(selected_id) = self.selected_project {
@@ -28,7 +59,12 @@ impl App {
                     if project_terms.terminals.is_empty() {
                         self.view_empty_project(selected_id, &project.name)
                     } else {
-                        self.view_terminals(selected_id, &project.name, project_terms)
+                        self.view_terminals(
+                            selected_id,
+                            &project.name,
+                            project.is_git_repo,
+                            project_terms,
+                        )
                     }
                 } else {
                     self.view_empty_project(selected_id, &project.name)
@@ -102,9 +138,11 @@ impl App {
         &'a self,
         project_id: Uuid,
         _project_name: &str,
+        is_git_repo: bool,
         project_terms: &'a ProjectTerminals,
     ) -> Element<'a, Message> {
         let tab_bar = self.view_tab_bar(project_id, project_terms);
+        let footer = self.view_terminal_footer(project_terms, is_git_repo);
 
         let terminal_content: Element<'_, Message> = match project_terms.display_mode {
             crate::terminal::DisplayMode::Tabs => {
@@ -185,9 +223,50 @@ impl App {
             container(terminal_content)
                 .width(Length::Fill)
                 .height(Length::Fill),
+            footer,
         ]
         .spacing(0)
         .into()
+    }
+
+    fn view_terminal_footer<'a>(
+        &'a self,
+        project_terms: &'a ProjectTerminals,
+        is_git_repo: bool,
+    ) -> Element<'a, Message> {
+        let footer = terminal_footer_model(
+            project_terms.display_mode,
+            project_terms.terminals.len(),
+            is_git_repo,
+        );
+
+        let mut content = row![].spacing(6).align_y(iced::alignment::Vertical::Center);
+        if footer.show_git_icon {
+            content = content.push(
+                bootstrap::git()
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.48, 0.48, 0.48)),
+            );
+        }
+        content = content.push(
+            text(footer.label)
+                .size(11)
+                .color(iced::Color::from_rgb(0.48, 0.48, 0.48)),
+        );
+
+        container(content)
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(|_| {
+                container::Style::default()
+                    .background(iced::Color::from_rgb(0.07, 0.07, 0.07))
+                    .border(iced::Border {
+                        color: iced::Color::from_rgb(0.16, 0.16, 0.16),
+                        width: 1.0,
+                        radius: 0.into(),
+                    })
+            })
+            .into()
     }
 
     pub(crate) fn view_tab_bar<'a>(
