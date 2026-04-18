@@ -2,7 +2,7 @@ mod git_data;
 mod theme;
 
 use self::git_data::{get_file_changes, FileChange};
-use iced::{Element, Task};
+use iced::{Element, Length, Task};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -64,6 +64,85 @@ impl GitWindow {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        iced::widget::text("Git Window").into()
+        use iced::Alignment;
+        use iced::widget::{column, container, row, scrollable, text};
+
+        if let Some(error) = &self.error {
+            return container(text(error).size(14).color(theme::TEXT_SECONDARY))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .into();
+        }
+
+        let (unstaged, staged): (Vec<_>, Vec<_>) =
+            self.file_changes.iter().partition(|file_change| !file_change.staged);
+
+        let mut content = column![].spacing(16).padding(20);
+
+        if !unstaged.is_empty() {
+            let header = text("UNSTAGED CHANGES")
+                .size(12)
+                .color(theme::TEXT_TERTIARY);
+
+            let mut file_list = column![].spacing(2);
+            for file_change in unstaged {
+                let status_text = match file_change.status {
+                    git_data::FileStatus::Added => "A",
+                    git_data::FileStatus::Modified => "M",
+                    git_data::FileStatus::Deleted => "D",
+                };
+
+                let status_color = match file_change.status {
+                    git_data::FileStatus::Added => theme::GIT_ADDED,
+                    git_data::FileStatus::Modified => theme::GIT_MODIFIED,
+                    git_data::FileStatus::Deleted => theme::GIT_DELETED,
+                };
+
+                let file_row = row![
+                    text(status_text).size(12).color(status_color),
+                    text(file_change.path.display().to_string())
+                        .size(13)
+                        .color(theme::TEXT_PRIMARY)
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center);
+
+                file_list = file_list.push(file_row);
+            }
+
+            content = content.push(header).push(file_list);
+        }
+
+        if !staged.is_empty() {
+            let header = text("STAGED CHANGES")
+                .size(12)
+                .color(theme::TEXT_TERTIARY);
+
+            let mut file_list = column![].spacing(2);
+            for file_change in staged {
+                let status_text = match file_change.status {
+                    git_data::FileStatus::Added => "A",
+                    git_data::FileStatus::Modified => "M",
+                    git_data::FileStatus::Deleted => "D",
+                };
+
+                let file_row = row![
+                    text(status_text).size(12).color(theme::GIT_ADDED),
+                    text(file_change.path.display().to_string())
+                        .size(13)
+                        .color(theme::TEXT_PRIMARY)
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center);
+
+                file_list = file_list.push(file_row);
+            }
+
+            content = content.push(header).push(file_list);
+        }
+
+        scrollable(content).into()
     }
 }
