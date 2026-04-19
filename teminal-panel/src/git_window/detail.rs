@@ -11,7 +11,7 @@ pub(super) fn view_selected_detail(detail: &SelectedFileDetail) -> Element<'_, M
             text(status_label(detail))
                 .size(11)
                 .color(status_color(detail)),
-            text(if detail.staged { "Staged" } else { "Working Tree" })
+            text("Working Tree")
                 .size(11)
                 .color(theme::TEXT_TERTIARY),
             text(if detail.dirty { "Unsaved edits" } else { "Saved" })
