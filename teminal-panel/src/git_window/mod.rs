@@ -1,7 +1,8 @@
 mod git_data;
+mod graph;
 mod theme;
 
-use self::git_data::{get_file_changes, FileChange};
+use self::git_data::{get_commit_history, get_file_changes, CommitNode, FileChange};
 use iced::{Element, Length, Task};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -11,6 +12,7 @@ pub struct GitWindow {
     project_name: String,
     repo_path: PathBuf,
     file_changes: Vec<FileChange>,
+    commit_history: Vec<CommitNode>,
     selected_file: Option<PathBuf>,
     error: Option<String>,
 }
@@ -36,8 +38,27 @@ impl GitWindow {
                         project_name,
                         repo_path,
                         file_changes: Vec::new(),
+                        commit_history: Vec::new(),
                         selected_file: None,
                         error: Some(format!("Failed to load git data: {}", e)),
+                    },
+                    Task::none(),
+                );
+            }
+        };
+
+        let commit_history = match get_commit_history(&repo_path, 150) {
+            Ok(commits) => commits,
+            Err(e) => {
+                return (
+                    Self {
+                        project_id,
+                        project_name,
+                        repo_path,
+                        file_changes,
+                        commit_history: Vec::new(),
+                        selected_file: None,
+                        error: Some(format!("Failed to load git history: {}", e)),
                     },
                     Task::none(),
                 );
@@ -50,6 +71,7 @@ impl GitWindow {
                 project_name,
                 repo_path,
                 file_changes,
+                commit_history,
                 selected_file: None,
                 error: None,
             },
@@ -132,8 +154,14 @@ impl GitWindow {
                     git_data::FileStatus::Deleted => "D",
                 };
 
+                let status_color = match file_change.status {
+                    git_data::FileStatus::Added => theme::GIT_ADDED,
+                    git_data::FileStatus::Modified => theme::GIT_MODIFIED,
+                    git_data::FileStatus::Deleted => theme::GIT_DELETED,
+                };
+
                 let file_row = row![
-                    text(status_text).size(12).color(theme::GIT_ADDED),
+                    text(status_text).size(12).color(status_color),
                     text(file_change.path.display().to_string())
                         .size(13)
                         .color(theme::TEXT_PRIMARY)
@@ -147,6 +175,15 @@ impl GitWindow {
             content = content.push(header).push(file_list);
         }
 
-        scrollable(content).into()
+        let graph_pane = graph::view_commit_graph(&self.commit_history);
+
+        row![
+            container(scrollable(content))
+                .width(Length::Fixed(300.0))
+                .height(Length::Fill),
+            graph_pane,
+        ]
+        .height(Length::Fill)
+        .into()
     }
 }
