@@ -5,7 +5,7 @@ mod theme;
 
 use self::git_data::{
     classify_file_content, get_base_file_content, get_commit_history, get_file_changes,
-    get_worktree_file_content, CommitNode, FileChange, FileContentKind,
+    get_index_file_content, get_worktree_file_content, CommitNode, FileChange, FileContentKind,
 };
 use iced::{widget::text_editor, Element, Length, Task};
 use std::path::{Path, PathBuf};
@@ -310,8 +310,13 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
         }
     };
 
-    let worktree_bytes = match get_worktree_file_content(repo_path, &selection.path) {
-        Ok(bytes) => Some(bytes),
+    let selected_bytes = match if selection.staged {
+        get_index_file_content(repo_path, &selection.path)
+            .map_err(|error| std::io::Error::other(error.message().to_string()))
+    } else {
+        get_worktree_file_content(repo_path, &selection.path).map(Some)
+    } {
+        Ok(bytes) => bytes,
         Err(error)
             if selection.status == git_data::FileStatus::Deleted
                 && error.kind() == std::io::ErrorKind::NotFound =>
@@ -330,7 +335,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
     let content_kind = if base_bytes
         .as_deref()
         .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
-        || worktree_bytes
+        || selected_bytes
             .as_deref()
             .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
     {
@@ -357,7 +362,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
     let base_text = base_bytes
         .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
         .unwrap_or_default();
-    let worktree_text = worktree_bytes
+    let worktree_text = selected_bytes
         .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
         .unwrap_or_default();
 
@@ -574,6 +579,46 @@ mod tests {
                 Some("")
             );
             assert!(detail.detail_error.is_none());
+        });
+    }
+
+    #[test]
+    fn git_window_detail_selecting_staged_file_uses_index_snapshot() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::write(repo_path.join("README.md"), "staged line\n")
+                .expect("write staged content");
+
+            let mut index = repo.index().expect("open index");
+            index
+                .add_path(std::path::Path::new("README.md"))
+                .expect("stage modified file");
+            index.write().expect("write index");
+
+            std::fs::write(repo_path.join("README.md"), "staged line\nunstaged line\n")
+                .expect("write unstaged follow-up");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: true,
+            }));
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected staged detail");
+
+            assert!(detail.staged);
+            assert_eq!(detail.base_text.as_deref(), Some("base line\n"));
+            assert_eq!(detail.worktree_text.as_deref(), Some("staged line\n"));
+            assert_eq!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                Some("staged line\n")
+            );
         });
     }
 }

@@ -11,7 +11,7 @@ pub(super) fn view_selected_detail(detail: &SelectedFileDetail) -> Element<'_, M
             text(status_label(detail))
                 .size(11)
                 .color(status_color(detail)),
-            text("Working Tree")
+            text(if detail.staged { "Staged" } else { "Working Tree" })
                 .size(11)
                 .color(theme::TEXT_TERTIARY),
             text(if detail.dirty { "Unsaved edits" } else { "Saved" })
@@ -66,7 +66,9 @@ fn view_text_detail(detail: &SelectedFileDetail) -> Element<'_, Message> {
         .height(Length::Fill),
         container(
             column![
-                text("Working Tree").size(12).color(theme::TEXT_TERTIARY),
+                text(if detail.staged { "Staged" } else { "Working Tree" })
+                    .size(12)
+                    .color(theme::TEXT_TERTIARY),
                 view_worktree_editor(detail)
             ]
             .spacing(8)

@@ -152,6 +152,21 @@ pub fn get_base_file_content(
     Ok(Some(blob.content().to_vec()))
 }
 
+pub fn get_index_file_content(
+    repo_path: &Path,
+    file_path: &Path,
+) -> Result<Option<Vec<u8>>, git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let index = repo.index()?;
+
+    let Some(entry) = index.get_path(file_path, 0) else {
+        return Ok(None);
+    };
+
+    let blob = repo.find_blob(entry.id)?;
+    Ok(Some(blob.content().to_vec()))
+}
+
 fn resolve_repo_relative_path(
     repo_path: &Path,
     file_path: &Path,
