@@ -189,11 +189,73 @@ fn resolve_repo_relative_path(
     Ok(repo_path.join(normalized))
 }
 
+fn canonical_repo_root(repo_path: &Path) -> Result<PathBuf, std::io::Error> {
+    std::fs::canonicalize(repo_path)
+}
+
+fn ensure_path_within_repo(
+    canonical_repo_root: &Path,
+    canonical_candidate: &Path,
+) -> Result<(), std::io::Error> {
+    if canonical_candidate.starts_with(canonical_repo_root) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "file path resolves outside repo root",
+        ))
+    }
+}
+
+fn validate_worktree_read_path(
+    repo_path: &Path,
+    file_path: &Path,
+) -> Result<PathBuf, std::io::Error> {
+    let full_path = resolve_repo_relative_path(repo_path, file_path)?;
+    let canonical_repo = canonical_repo_root(repo_path)?;
+    let canonical_file = std::fs::canonicalize(&full_path)?;
+    ensure_path_within_repo(&canonical_repo, &canonical_file)?;
+    Ok(full_path)
+}
+
+fn validate_worktree_write_path(
+    repo_path: &Path,
+    file_path: &Path,
+) -> Result<PathBuf, std::io::Error> {
+    let full_path = resolve_repo_relative_path(repo_path, file_path)?;
+    let canonical_repo = canonical_repo_root(repo_path)?;
+
+    if full_path.exists() {
+        let canonical_file = std::fs::canonicalize(&full_path)?;
+        ensure_path_within_repo(&canonical_repo, &canonical_file)?;
+        return Ok(full_path);
+    }
+
+    let mut existing_ancestor = full_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "file path must include a parent directory",
+        )
+    })?;
+    while !existing_ancestor.exists() {
+        existing_ancestor = existing_ancestor.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "file path must stay within repo root",
+            )
+        })?;
+    }
+
+    let canonical_ancestor = std::fs::canonicalize(existing_ancestor)?;
+    ensure_path_within_repo(&canonical_repo, &canonical_ancestor)?;
+    Ok(full_path)
+}
+
 pub fn get_worktree_file_content(
     repo_path: &Path,
     file_path: &Path,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let full_path = resolve_repo_relative_path(repo_path, file_path)?;
+    let full_path = validate_worktree_read_path(repo_path, file_path)?;
     std::fs::read(full_path)
 }
 
@@ -214,7 +276,7 @@ pub fn write_worktree_file(
     file_path: &Path,
     contents: &str,
 ) -> Result<(), std::io::Error> {
-    let full_path = resolve_repo_relative_path(repo_path, file_path)?;
+    let full_path = validate_worktree_write_path(repo_path, file_path)?;
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -478,6 +540,71 @@ mod tests {
                 write_result.expect_err("traversal should fail").kind(),
                 std::io::ErrorKind::InvalidInput
             );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_file_detail_rejects_symlink_escape_on_worktree_read() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(
+                repo,
+                repo_path,
+                "README.md",
+                "base line\n",
+                "Initial commit",
+            );
+
+            let outside_file = repo_path
+                .parent()
+                .expect("temp repo has parent")
+                .join("outside-read.txt");
+            std::fs::write(&outside_file, "outside content\n").expect("write outside file");
+
+            let link_path = repo_path.join("escape-read-link");
+            std::os::unix::fs::symlink(&outside_file, &link_path).expect("create symlink");
+
+            let read_result = get_worktree_file_content(repo_path, Path::new("escape-read-link"));
+
+            assert_eq!(
+                read_result.expect_err("symlink escape should fail").kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_file_detail_rejects_symlink_escape_on_worktree_write() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(
+                repo,
+                repo_path,
+                "README.md",
+                "base line\n",
+                "Initial commit",
+            );
+
+            let outside_dir = repo_path
+                .parent()
+                .expect("temp repo has parent")
+                .join(format!("outside-write-dir-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&outside_dir).expect("create outside dir");
+
+            let link_path = repo_path.join("escape-write-link");
+            std::os::unix::fs::symlink(&outside_dir, &link_path).expect("create symlink");
+
+            let write_result = write_worktree_file(
+                repo_path,
+                Path::new("escape-write-link/hijack.txt"),
+                "updated line\n",
+            );
+
+            assert_eq!(
+                write_result.expect_err("symlink escape should fail").kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            assert!(!outside_dir.join("hijack.txt").exists());
         });
     }
 }
