@@ -193,10 +193,8 @@ impl GitWindow {
                 };
 
                 let file_path = file_change.path.clone();
-                let is_selected = self
-                    .selected_detail
-                    .as_ref()
-                    .is_some_and(|detail| detail.path == file_path);
+                let is_selected =
+                    is_selected_file_change(self.selected_detail.as_ref(), file_change);
                 let file_row = button(
                     row![
                         text(status_text).size(12).color(status_color),
@@ -246,10 +244,8 @@ impl GitWindow {
                 };
 
                 let file_path = file_change.path.clone();
-                let is_selected = self
-                    .selected_detail
-                    .as_ref()
-                    .is_some_and(|detail| detail.path == file_path);
+                let is_selected =
+                    is_selected_file_change(self.selected_detail.as_ref(), file_change);
                 let file_row = button(
                     row![
                         text(status_text).size(12).color(status_color),
@@ -331,7 +327,8 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
         }
     };
 
-    let diff = git_data::get_file_diff(repo_path, &selection.path).ok();
+    let diff = git_data::get_file_diff_for_selection(repo_path, &selection.path, selection.staged)
+        .ok();
     let content_kind = if base_bytes
         .as_deref()
         .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
@@ -378,6 +375,15 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
         diff,
         detail_error: None,
     }
+}
+
+fn is_selected_file_change(
+    selected_detail: Option<&SelectedFileDetail>,
+    file_change: &FileChange,
+) -> bool {
+    selected_detail.is_some_and(|detail| {
+        detail.path == file_change.path && detail.staged == file_change.staged
+    })
 }
 
 #[cfg(test)]
@@ -620,5 +626,35 @@ mod tests {
                 Some("staged line\n")
             );
         });
+    }
+
+    #[test]
+    fn git_window_selected_file_row_distinguishes_staged_entries() {
+        let selected = SelectedFileDetail {
+            path: PathBuf::from("README.md"),
+            status: git_data::FileStatus::Modified,
+            staged: true,
+            content_kind: git_data::FileContentKind::Text,
+            base_text: Some("base line\n".into()),
+            worktree_text: Some("staged line\n".into()),
+            draft: Some(text_editor::Content::with_text("staged line\n")),
+            dirty: false,
+            diff: None,
+            detail_error: None,
+        };
+
+        let staged_change = FileChange {
+            path: PathBuf::from("README.md"),
+            status: git_data::FileStatus::Modified,
+            staged: true,
+        };
+        let unstaged_change = FileChange {
+            path: PathBuf::from("README.md"),
+            status: git_data::FileStatus::Modified,
+            staged: false,
+        };
+
+        assert!(is_selected_file_change(Some(&selected), &staged_change));
+        assert!(!is_selected_file_change(Some(&selected), &unstaged_change));
     }
 }

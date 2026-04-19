@@ -116,13 +116,30 @@ pub fn get_commit_history(repo_path: &Path, limit: usize) -> Result<Vec<CommitNo
 }
 
 pub fn get_file_diff(repo_path: &Path, file_path: &Path) -> Result<String, git2::Error> {
+    get_file_diff_for_selection(repo_path, file_path, false)
+}
+
+pub fn get_file_diff_for_selection(
+    repo_path: &Path,
+    file_path: &Path,
+    staged: bool,
+) -> Result<String, git2::Error> {
     let repo = Repository::open(repo_path)?;
     let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
 
     let mut opts = DiffOptions::new();
     opts.pathspec(file_path);
 
-    let diff = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
+    let diff = if staged {
+        let index = repo.index()?;
+        repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut opts))?
+    } else {
+        repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?
+    };
+    render_diff_text(&diff)
+}
+
+fn render_diff_text(diff: &git2::Diff<'_>) -> Result<String, git2::Error> {
     let mut patch = String::new();
 
     diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
@@ -447,6 +464,30 @@ mod tests {
             let diff = get_file_diff(repo_path, Path::new("README.md")).expect("load file diff");
 
             assert!(diff.contains("+fo\u{FFFD}o"));
+        });
+    }
+
+    #[test]
+    fn git_file_diff_for_staged_selection_uses_index_snapshot() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n", "Initial commit");
+            std::fs::write(repo_path.join("README.md"), "staged line\n")
+                .expect("write staged content");
+
+            let mut index = repo.index().expect("open index");
+            index
+                .add_path(Path::new("README.md"))
+                .expect("stage modified file");
+            index.write().expect("write index");
+
+            std::fs::write(repo_path.join("README.md"), "staged line\nunstaged line\n")
+                .expect("write unstaged follow-up");
+
+            let diff = get_file_diff_for_selection(repo_path, Path::new("README.md"), true)
+                .expect("load staged diff");
+
+            assert!(diff.contains("+staged line"));
+            assert!(!diff.contains("+unstaged line"));
         });
     }
 
