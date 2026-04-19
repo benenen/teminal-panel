@@ -256,7 +256,10 @@ fn open_git_window_creates_tracked_state_for_git_project() {
             .get(&project_id)
             .expect("git window tracked");
 
-        assert_eq!(app.git_window_projects_by_id.get(&state.window_id), Some(&project_id));
+        assert_eq!(
+            app.git_window_projects_by_id.get(&state.window_id),
+            Some(&project_id)
+        );
     });
 }
 

@@ -543,8 +543,11 @@ impl App {
                 }
 
                 let (window_id, open_window) = iced::window::open(Self::git_window_settings());
-                let (git_window, task) =
-                    crate::git_window::GitWindow::new(project_id, project_name.clone(), working_dir);
+                let (git_window, task) = crate::git_window::GitWindow::new(
+                    project_id,
+                    project_name.clone(),
+                    working_dir,
+                );
 
                 self.track_git_window_with_state(
                     project_id,
@@ -826,13 +829,11 @@ impl App {
             })
     }
 
-    fn track_git_window_with_state(
-        &mut self,
-        project_id: Uuid,
-        state: GitWindowState,
-    ) -> bool {
+    fn track_git_window_with_state(&mut self, project_id: Uuid, state: GitWindowState) -> bool {
         if self.git_windows_by_project.contains_key(&project_id)
-            || self.git_window_projects_by_id.contains_key(&state.window_id)
+            || self
+                .git_window_projects_by_id
+                .contains_key(&state.window_id)
         {
             return false;
         }
@@ -870,7 +871,10 @@ impl App {
         self.git_windows_by_project.get(project_id)
     }
 
-    fn git_window_for_window(&self, window_id: iced::window::Id) -> Option<&crate::git_window::GitWindow> {
+    fn git_window_for_window(
+        &self,
+        window_id: iced::window::Id,
+    ) -> Option<&crate::git_window::GitWindow> {
         self.git_window_state_for_window(window_id)
             .and_then(|state| state.git_window.as_ref())
     }

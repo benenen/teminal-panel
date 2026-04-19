@@ -95,7 +95,8 @@ mod tests {
     use uuid::Uuid;
 
     fn with_temp_repo<T>(f: impl FnOnce(&Path, &Repository) -> T) -> T {
-        let temp_dir = std::env::temp_dir().join(format!("teminal-panel-git-data-{}", Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("teminal-panel-git-data-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).expect("create temp repo dir");
 
         let repo = Repository::init(&temp_dir).expect("init repo");
@@ -105,7 +106,13 @@ mod tests {
         result
     }
 
-    fn commit_file(repo: &Repository, repo_path: &Path, file_name: &str, contents: &str, message: &str) {
+    fn commit_file(
+        repo: &Repository,
+        repo_path: &Path,
+        file_name: &str,
+        contents: &str,
+        message: &str,
+    ) {
         std::fs::write(repo_path.join(file_name), contents).expect("write repo file");
 
         let mut index = repo.index().expect("open index");
@@ -118,15 +125,8 @@ mod tests {
         let tree = repo.find_tree(tree_id).expect("find tree");
         let signature = Signature::now("Test User", "test@example.com").expect("signature");
 
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            message,
-            &tree,
-            &[],
-        )
-        .expect("create commit");
+        repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
+            .expect("create commit");
     }
 
     #[test]
