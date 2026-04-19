@@ -296,7 +296,11 @@ impl GitWindow {
 }
 
 fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> SelectedFileDetail {
-    let base_bytes = match get_base_file_content(repo_path, &selection.path) {
+    let base_bytes = match if selection.staged {
+        get_base_file_content(repo_path, &selection.path)
+    } else {
+        get_index_file_content(repo_path, &selection.path)
+    } {
         Ok(bytes) => bytes,
         Err(error) => {
             return SelectedFileDetail::error(
@@ -624,6 +628,45 @@ mod tests {
             assert_eq!(
                 detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
                 Some("staged line\n")
+            );
+        });
+    }
+
+    #[test]
+    fn git_window_detail_selecting_unstaged_file_uses_index_as_base_snapshot() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::write(repo_path.join("README.md"), "staged line\n")
+                .expect("write staged content");
+
+            let mut index = repo.index().expect("open index");
+            index
+                .add_path(std::path::Path::new("README.md"))
+                .expect("stage modified file");
+            index.write().expect("write index");
+
+            std::fs::write(repo_path.join("README.md"), "staged line\nunstaged line\n")
+                .expect("write unstaged follow-up");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected unstaged detail");
+
+            assert!(!detail.staged);
+            assert_eq!(detail.base_text.as_deref(), Some("staged line\n"));
+            assert_eq!(
+                detail.worktree_text.as_deref(),
+                Some("staged line\nunstaged line\n")
             );
         });
     }
