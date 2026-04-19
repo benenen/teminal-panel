@@ -23,15 +23,26 @@ pub(super) fn view_selected_detail(detail: &SelectedFileDetail) -> Element<'_, M
     ]
     .spacing(6);
 
-    let body = if let Some(error) = &detail.detail_error {
-        view_error_detail(error)
-    } else if detail.content_kind == super::git_data::FileContentKind::Binary {
+    let can_render_text_detail = detail.base_text.is_some() || detail.draft.is_some();
+    let body = if detail.content_kind == super::git_data::FileContentKind::Binary {
         view_binary_detail(detail)
-    } else {
+    } else if can_render_text_detail {
         view_text_detail(detail)
+    } else if let Some(error) = &detail.detail_error {
+        view_error_detail(error)
+    } else {
+        view_error_detail("File detail is unavailable.")
     };
 
-    container(column![header, body].spacing(16).padding(20))
+    let mut content = column![header].spacing(16).padding(20);
+
+    if let Some(error) = &detail.detail_error {
+        content = content.push(view_error_banner(error));
+    }
+
+    content = content.push(body);
+
+    container(content)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -147,6 +158,13 @@ fn view_binary_detail(detail: &SelectedFileDetail) -> Element<'_, Message> {
 
 fn view_error_detail(error: &str) -> Element<'_, Message> {
     text(error.to_string()).size(13).color(theme::GIT_DELETED).into()
+}
+
+fn view_error_banner(error: &str) -> Element<'_, Message> {
+    container(text(error).size(12).color(theme::GIT_DELETED))
+        .padding(10)
+        .width(Length::Fill)
+        .into()
 }
 
 fn status_label(detail: &SelectedFileDetail) -> &'static str {
