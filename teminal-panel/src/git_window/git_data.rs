@@ -31,6 +31,32 @@ pub enum FileContentKind {
     Binary,
 }
 
+fn classify_change_status(status_flags: Status, staged: bool) -> Option<FileStatus> {
+    if staged {
+        if status_flags.contains(Status::INDEX_NEW) {
+            Some(FileStatus::Added)
+        } else if status_flags.contains(Status::INDEX_DELETED) {
+            Some(FileStatus::Deleted)
+        } else if status_flags.intersects(
+            Status::INDEX_MODIFIED | Status::INDEX_RENAMED | Status::INDEX_TYPECHANGE,
+        ) {
+            Some(FileStatus::Modified)
+        } else {
+            None
+        }
+    } else if status_flags.contains(Status::WT_NEW) {
+        Some(FileStatus::Added)
+    } else if status_flags.contains(Status::WT_DELETED) {
+        Some(FileStatus::Deleted)
+    } else if status_flags
+        .intersects(Status::WT_MODIFIED | Status::WT_RENAMED | Status::WT_TYPECHANGE)
+    {
+        Some(FileStatus::Modified)
+    } else {
+        None
+    }
+}
+
 pub fn get_file_changes(repo_path: &Path) -> Result<Vec<FileChange>, git2::Error> {
     let repo = Repository::open(repo_path)?;
     let mut opts = StatusOptions::new();
@@ -44,26 +70,21 @@ pub fn get_file_changes(repo_path: &Path) -> Result<Vec<FileChange>, git2::Error
             let path_buf = PathBuf::from(path);
             let status_flags = entry.status();
 
-            let staged = status_flags
-                .intersects(Status::INDEX_NEW | Status::INDEX_MODIFIED | Status::INDEX_DELETED);
+            if let Some(status) = classify_change_status(status_flags, false) {
+                changes.push(FileChange {
+                    path: path_buf.clone(),
+                    status,
+                    staged: false,
+                });
+            }
 
-            let status = if status_flags.contains(Status::WT_NEW)
-                || status_flags.contains(Status::INDEX_NEW)
-            {
-                FileStatus::Added
-            } else if status_flags.contains(Status::WT_DELETED)
-                || status_flags.contains(Status::INDEX_DELETED)
-            {
-                FileStatus::Deleted
-            } else {
-                FileStatus::Modified
-            };
-
-            changes.push(FileChange {
-                path: path_buf,
-                status,
-                staged,
-            });
+            if let Some(status) = classify_change_status(status_flags, true) {
+                changes.push(FileChange {
+                    path: path_buf,
+                    status,
+                    staged: true,
+                });
+            }
         }
     }
 
@@ -497,6 +518,43 @@ mod tests {
 
             let updated = std::fs::read(repo_path.join("README.md")).expect("read updated file");
             assert_eq!(updated, b"updated line\n".to_vec());
+        });
+    }
+
+    #[test]
+    fn git_file_changes_split_staged_and_unstaged_entries_for_same_path() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(
+                repo,
+                repo_path,
+                "README.md",
+                "base line\n",
+                "Initial commit",
+            );
+            std::fs::write(repo_path.join("README.md"), "staged line\n")
+                .expect("write staged content");
+
+            let mut index = repo.index().expect("open index");
+            index
+                .add_path(Path::new("README.md"))
+                .expect("stage modified file");
+            index.write().expect("write index");
+
+            std::fs::write(repo_path.join("README.md"), "staged line\nunstaged line\n")
+                .expect("write unstaged follow-up");
+
+            let changes = get_file_changes(repo_path).expect("load file changes");
+            let mut matching = changes
+                .into_iter()
+                .filter(|change| change.path == PathBuf::from("README.md"))
+                .collect::<Vec<_>>();
+            matching.sort_by_key(|change| change.staged);
+
+            assert_eq!(matching.len(), 2);
+            assert_eq!(matching[0].status, FileStatus::Modified);
+            assert!(!matching[0].staged);
+            assert_eq!(matching[1].status, FileStatus::Modified);
+            assert!(matching[1].staged);
         });
     }
 
