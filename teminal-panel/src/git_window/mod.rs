@@ -176,19 +176,10 @@ impl GitWindow {
 
                 match write_worktree_file(&self.repo_path, &selection.path, &draft_text) {
                     Ok(()) => {
-                        if let Ok(changes) = get_file_changes(&self.repo_path) {
-                            self.file_changes = changes;
-                        }
-
-                        match try_load_selected_file_detail(&self.repo_path, &selection) {
-                            Ok(detail) => {
-                                self.selected_detail = Some(detail);
-                            }
-                            Err(error) => {
-                                if let Some(detail) = self.selected_detail.as_mut() {
-                                    detail.detail_error =
-                                        Some(format!("Failed to reload applied changes: {error}"));
-                                }
+                        if let Err(error) = self.refresh_selection_after_file_change(&selection) {
+                            if let Some(detail) = self.selected_detail.as_mut() {
+                                detail.detail_error =
+                                    Some(format!("Failed to reload applied changes: {error}"));
                             }
                         }
                     }
@@ -214,18 +205,10 @@ impl GitWindow {
                     return Task::none();
                 }
 
-                match try_load_selected_file_detail(&self.repo_path, &selection) {
-                    Ok(detail) => {
-                        if let Ok(changes) = get_file_changes(&self.repo_path) {
-                            self.file_changes = changes;
-                        }
-                        self.selected_detail = Some(detail);
-                    }
-                    Err(error) => {
-                        if let Some(detail) = self.selected_detail.as_mut() {
-                            detail.detail_error =
-                                Some(format!("Failed to discard changes: {error}"));
-                        }
+                if let Err(error) = self.refresh_selection_after_file_change(&selection) {
+                    if let Some(detail) = self.selected_detail.as_mut() {
+                        detail.detail_error =
+                            Some(format!("Failed to discard changes: {error}"));
                     }
                 }
                 Task::none()
@@ -375,6 +358,23 @@ impl GitWindow {
         .height(Length::Fill)
         .into()
     }
+
+    fn refresh_selection_after_file_change(
+        &mut self,
+        previous_selection: &FileSelection,
+    ) -> Result<(), String> {
+        let changes = get_file_changes(&self.repo_path)
+            .map_err(|error| format!("Failed to load git data: {error}"))?;
+        let next_selection = find_refreshed_selection(&changes, previous_selection);
+
+        self.file_changes = changes;
+        self.selected_detail = match next_selection {
+            Some(selection) => Some(try_load_selected_file_detail(&self.repo_path, &selection)?),
+            None => None,
+        };
+
+        Ok(())
+    }
 }
 
 fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> SelectedFileDetail {
@@ -474,6 +474,22 @@ fn is_selected_file_change(
     })
 }
 
+fn find_refreshed_selection(
+    file_changes: &[FileChange],
+    previous_selection: &FileSelection,
+) -> Option<FileSelection> {
+    file_changes
+        .iter()
+        .find(|change| {
+            change.path == previous_selection.path && change.staged == previous_selection.staged
+        })
+        .map(|change| FileSelection {
+            path: change.path.clone(),
+            status: change.status.clone(),
+            staged: change.staged,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,6 +526,12 @@ mod tests {
         let tree_id = index.write_tree().expect("write tree");
         let tree = repo.find_tree(tree_id).expect("find tree");
         let signature = Signature::now("Test User", "test@example.com").expect("signature");
+        let parent_commit = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| repo.find_commit(oid).ok());
+        let parents = parent_commit.iter().collect::<Vec<_>>();
 
         repo.commit(
             Some("HEAD"),
@@ -517,7 +539,7 @@ mod tests {
             &signature,
             "Initial commit",
             &tree,
-            &[],
+            &parents,
         )
         .expect("create commit");
     }
@@ -919,6 +941,110 @@ mod tests {
 
             let _ = std::fs::remove_file(repo_path.join("README.md"));
             let _ = std::fs::remove_dir_all(&outside_dir);
+        });
+    }
+
+    #[test]
+    fn refresh_git_window_after_apply_clears_detail_for_clean_file() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::write(repo_path.join("README.md"), "working line\n")
+                .expect("write working tree content");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::SelectAll));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Paste(Arc::new("base line\n".into())),
+            )));
+            let _ = git_window.update(Message::ApplySelectedFile);
+
+            assert!(git_window
+                .file_changes
+                .iter()
+                .all(|change| change.path != PathBuf::from("README.md")));
+            assert!(git_window.selected_detail.is_none());
+        });
+    }
+
+    #[test]
+    fn refresh_git_window_after_apply_updates_recreated_file_status() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::remove_file(repo_path.join("README.md")).expect("delete repo file");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Deleted,
+                staged: false,
+            }));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::SelectAll));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Paste(Arc::new("restored line\n".into())),
+            )));
+            let _ = git_window.update(Message::ApplySelectedFile);
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected file detail");
+
+            assert_eq!(detail.status, git_data::FileStatus::Modified);
+            assert!(git_window.file_changes.iter().any(|change| {
+                change.path == PathBuf::from("README.md")
+                    && change.status == git_data::FileStatus::Modified
+                    && !change.staged
+            }));
+        });
+    }
+
+    #[test]
+    fn file_list_refresh_after_apply_allows_selecting_another_file() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            commit_file(repo, repo_path, "NOTES.md", "notes base\n");
+            std::fs::write(repo_path.join("README.md"), "working line\n")
+                .expect("write working tree content");
+            std::fs::write(repo_path.join("NOTES.md"), "notes changed\n")
+                .expect("write notes content");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::SelectAll));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Paste(Arc::new("base line\n".into())),
+            )));
+            let _ = git_window.update(Message::ApplySelectedFile);
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("NOTES.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected notes detail");
+
+            assert_eq!(detail.path, PathBuf::from("NOTES.md"));
+            assert_eq!(detail.base_text.as_deref(), Some("notes base\n"));
+            assert_eq!(detail.worktree_text.as_deref(), Some("notes changed\n"));
         });
     }
 }
