@@ -11,12 +11,20 @@ pub(super) fn view_selected_detail(detail: &SelectedFileDetail) -> Element<'_, M
             text(status_label(detail))
                 .size(11)
                 .color(status_color(detail)),
-            text(if detail.staged { "Staged" } else { "Working Tree" })
-                .size(11)
-                .color(theme::TEXT_TERTIARY),
-            text(if detail.dirty { "Unsaved edits" } else { "Saved" })
-                .size(11)
-                .color(theme::TEXT_TERTIARY),
+            text(if detail.staged {
+                "Staged"
+            } else {
+                "Working Tree"
+            })
+            .size(11)
+            .color(theme::TEXT_TERTIARY),
+            text(if detail.dirty {
+                "Unsaved edits"
+            } else {
+                "Saved"
+            })
+            .size(11)
+            .color(theme::TEXT_TERTIARY),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
@@ -85,9 +93,13 @@ fn view_text_detail(detail: &SelectedFileDetail) -> Element<'_, Message> {
         .height(Length::Fill),
         container(
             column![
-                text(if detail.staged { "Staged" } else { "Working Tree" })
-                    .size(12)
-                    .color(theme::TEXT_TERTIARY),
+                text(if detail.staged {
+                    "Staged"
+                } else {
+                    "Working Tree"
+                })
+                .size(12)
+                .color(theme::TEXT_TERTIARY),
                 view_worktree_editor(detail)
             ]
             .spacing(8)
@@ -157,7 +169,10 @@ fn view_binary_detail(detail: &SelectedFileDetail) -> Element<'_, Message> {
 }
 
 fn view_error_detail(error: &str) -> Element<'_, Message> {
-    text(error.to_string()).size(13).color(theme::GIT_DELETED).into()
+    text(error.to_string())
+        .size(13)
+        .color(theme::GIT_DELETED)
+        .into()
 }
 
 fn view_error_banner(error: &str) -> Element<'_, Message> {

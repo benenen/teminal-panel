@@ -37,9 +37,9 @@ fn classify_change_status(status_flags: Status, staged: bool) -> Option<FileStat
             Some(FileStatus::Added)
         } else if status_flags.contains(Status::INDEX_DELETED) {
             Some(FileStatus::Deleted)
-        } else if status_flags.intersects(
-            Status::INDEX_MODIFIED | Status::INDEX_RENAMED | Status::INDEX_TYPECHANGE,
-        ) {
+        } else if status_flags
+            .intersects(Status::INDEX_MODIFIED | Status::INDEX_RENAMED | Status::INDEX_TYPECHANGE)
+        {
             Some(FileStatus::Modified)
         } else {
             None
@@ -60,7 +60,7 @@ fn classify_change_status(status_flags: Status, staged: bool) -> Option<FileStat
 pub fn get_file_changes(repo_path: &Path) -> Result<Vec<FileChange>, git2::Error> {
     let repo = Repository::open(repo_path)?;
     let mut opts = StatusOptions::new();
-    opts.include_untracked(true);
+    opts.include_untracked(true).recurse_untracked_dirs(true);
 
     let statuses = repo.statuses(Some(&mut opts))?;
     let mut changes = Vec::new();
@@ -471,7 +471,13 @@ mod tests {
     #[test]
     fn git_file_diff_for_staged_selection_uses_index_snapshot() {
         with_temp_repo(|repo_path, repo| {
-            commit_file(repo, repo_path, "README.md", "base line\n", "Initial commit");
+            commit_file(
+                repo,
+                repo_path,
+                "README.md",
+                "base line\n",
+                "Initial commit",
+            );
             std::fs::write(repo_path.join("README.md"), "staged line\n")
                 .expect("write staged content");
 
@@ -495,7 +501,13 @@ mod tests {
     #[test]
     fn git_file_diff_for_unstaged_selection_uses_index_to_worktree_diff() {
         with_temp_repo(|repo_path, repo| {
-            commit_file(repo, repo_path, "README.md", "base line\n", "Initial commit");
+            commit_file(
+                repo,
+                repo_path,
+                "README.md",
+                "base line\n",
+                "Initial commit",
+            );
             std::fs::write(repo_path.join("README.md"), "staged line\n")
                 .expect("write staged content");
 
@@ -621,6 +633,26 @@ mod tests {
             assert!(!matching[0].staged);
             assert_eq!(matching[1].status, FileStatus::Modified);
             assert!(matching[1].staged);
+        });
+    }
+
+    #[test]
+    fn git_file_changes_recurse_untracked_directories_to_file_entries() {
+        with_temp_repo(|repo_path, _repo| {
+            std::fs::create_dir_all(repo_path.join("newdir")).expect("create new dir");
+            std::fs::write(repo_path.join("newdir/file.txt"), "new file\n")
+                .expect("write new file");
+
+            let changes = get_file_changes(repo_path).expect("load file changes");
+
+            assert!(changes.iter().any(|change| {
+                change.path == PathBuf::from("newdir/file.txt")
+                    && change.status == FileStatus::Added
+                    && !change.staged
+            }));
+            assert!(!changes
+                .iter()
+                .any(|change| change.path == PathBuf::from("newdir")));
         });
     }
 

@@ -5,8 +5,8 @@ mod theme;
 
 use self::git_data::{
     classify_file_content, get_base_file_content, get_commit_history, get_file_changes,
-    get_index_file_content, get_worktree_file_content, write_worktree_file, CommitNode,
-    FileChange, FileContentKind,
+    get_index_file_content, get_worktree_file_content, write_worktree_file, CommitNode, FileChange,
+    FileContentKind,
 };
 use iced::{widget::text_editor, Element, Length, Task};
 use std::path::{Path, PathBuf};
@@ -135,8 +135,7 @@ impl GitWindow {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SelectFile(selection) => {
-                self.selected_detail =
-                    Some(load_selected_file_detail(&self.repo_path, &selection));
+                self.selected_detail = Some(load_selected_file_detail(&self.repo_path, &selection));
                 Task::none()
             }
             Message::EditSelectedFile(action) => {
@@ -185,8 +184,7 @@ impl GitWindow {
                     }
                     Err(error) => {
                         if let Some(detail) = self.selected_detail.as_mut() {
-                            detail.detail_error =
-                                Some(format!("Failed to apply changes: {error}"));
+                            detail.detail_error = Some(format!("Failed to apply changes: {error}"));
                         }
                     }
                 }
@@ -207,8 +205,7 @@ impl GitWindow {
 
                 if let Err(error) = self.refresh_selection_after_file_change(&selection) {
                     if let Some(detail) = self.selected_detail.as_mut() {
-                        detail.detail_error =
-                            Some(format!("Failed to discard changes: {error}"));
+                        detail.detail_error = Some(format!("Failed to discard changes: {error}"));
                     }
                 }
                 Task::none()
@@ -415,8 +412,8 @@ fn try_load_selected_file_detail(
         }
     };
 
-    let diff = git_data::get_file_diff_for_selection(repo_path, &selection.path, selection.staged)
-        .ok();
+    let diff =
+        git_data::get_file_diff_for_selection(repo_path, &selection.path, selection.staged).ok();
     let content_kind = if base_bytes
         .as_deref()
         .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
@@ -572,7 +569,11 @@ mod tests {
             assert_eq!(detail.base_text.as_deref(), Some("# test\n"));
             assert_eq!(detail.worktree_text.as_deref(), Some("# test\nnew line\n"));
             assert_eq!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 Some("# test\nnew line\n")
             );
             assert!(!detail.dirty);
@@ -660,7 +661,11 @@ mod tests {
 
             assert!(detail.dirty);
             assert_ne!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 detail.worktree_text.as_deref()
             );
         });
@@ -692,7 +697,11 @@ mod tests {
             assert_eq!(detail.base_text.as_deref(), Some("# test\n"));
             assert_eq!(detail.worktree_text.as_deref(), Some(""));
             assert_eq!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 Some("")
             );
             assert!(detail.detail_error.is_none());
@@ -733,7 +742,11 @@ mod tests {
             assert_eq!(detail.base_text.as_deref(), Some("base line\n"));
             assert_eq!(detail.worktree_text.as_deref(), Some("staged line\n"));
             assert_eq!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 Some("staged line\n")
             );
         });
@@ -840,7 +853,11 @@ mod tests {
             );
             assert_eq!(detail.worktree_text.as_deref(), Some("applied line\n"));
             assert_eq!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 Some("applied line\n")
             );
             assert!(!detail.dirty);
@@ -880,7 +897,11 @@ mod tests {
 
             assert_eq!(detail.worktree_text.as_deref(), Some("reloaded line\n"));
             assert_eq!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 Some("reloaded line\n")
             );
             assert!(!detail.dirty);
@@ -930,7 +951,11 @@ mod tests {
                 .expect("selected file detail");
 
             assert_eq!(
-                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .as_deref(),
                 Some("draft line\n")
             );
             assert!(detail.dirty);
