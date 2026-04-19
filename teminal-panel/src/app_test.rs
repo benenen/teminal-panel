@@ -293,6 +293,32 @@ fn open_git_window_reuses_existing_tracked_state() {
 }
 
 #[test]
+fn close_git_window_event_cleans_up_tracked_state() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        init_git_repo_with_commit(workspace_dir);
+
+        let mut app = test_app();
+        let _ = app.update(Message::AddProject {
+            name: "repo".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::OpenGitWindow(project_id));
+        let window_id = app
+            .git_windows_by_project
+            .get(&project_id)
+            .expect("tracked git window")
+            .window_id;
+
+        let _ = app.update(Message::WindowClosed(window_id));
+
+        assert!(!app.git_windows_by_project.contains_key(&project_id));
+        assert!(!app.git_window_projects_by_id.contains_key(&window_id));
+    });
+}
+
+#[test]
 fn open_terminal_without_matching_project_is_noop() {
     let mut app = test_app();
     let _ = app.update(Message::OpenTerminal(uuid::Uuid::new_v4()));
