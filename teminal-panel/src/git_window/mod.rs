@@ -1,3 +1,4 @@
+mod detail;
 mod git_data;
 mod graph;
 mod theme;
@@ -6,7 +7,7 @@ use self::git_data::{
     classify_file_content, get_base_file_content, get_commit_history, get_file_changes,
     get_worktree_file_content, CommitNode, FileChange, FileContentKind,
 };
-use iced::{widget::text_editor, Element, Font, Length, Task};
+use iced::{widget::text_editor, Element, Length, Task};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -281,77 +282,7 @@ impl GitWindow {
         }
 
         let detail_pane: Element<'_, Message> = if let Some(detail) = &self.selected_detail {
-            let header = text(detail.path.display().to_string())
-                .size(14)
-                .color(theme::TEXT_PRIMARY);
-
-            let body: Element<'_, Message> = if let Some(error) = &detail.detail_error {
-                text(error.clone()).size(13).color(theme::GIT_DELETED).into()
-            } else if detail.content_kind == FileContentKind::Binary {
-                let diff_summary = detail
-                    .diff
-                    .as_deref()
-                    .filter(|diff| !diff.is_empty())
-                    .unwrap_or("Binary file selected");
-
-                column![
-                    text("Binary file").size(13).color(theme::TEXT_PRIMARY),
-                    text("Editing is not supported for binary files.")
-                        .size(12)
-                        .color(theme::TEXT_SECONDARY),
-                    scrollable(
-                        text(diff_summary)
-                            .size(12)
-                            .font(Font::MONOSPACE)
-                            .color(theme::TEXT_TERTIARY)
-                    )
-                ]
-                .spacing(12)
-                .into()
-            } else {
-                let dirty_label = if detail.dirty { "Dirty" } else { "Saved" };
-                let base_text = detail.base_text.as_deref().unwrap_or("");
-                let draft_text = detail
-                    .draft
-                    .as_ref()
-                    .map(text_editor::Content::text)
-                    .unwrap_or_default();
-
-                column![
-                    text(dirty_label).size(12).color(theme::TEXT_TERTIARY),
-                    row![
-                        container(
-                            scrollable(
-                                text(base_text)
-                                    .size(12)
-                                    .font(Font::MONOSPACE)
-                                    .color(theme::TEXT_SECONDARY)
-                            )
-                        )
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                        container(
-                            scrollable(
-                                text(draft_text)
-                                    .size(12)
-                                    .font(Font::MONOSPACE)
-                                    .color(theme::TEXT_PRIMARY)
-                            )
-                        )
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                    ]
-                    .spacing(12)
-                    .height(Length::Fill)
-                ]
-                .spacing(12)
-                .into()
-            };
-
-            container(column![header, body].spacing(12).padding(20))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+            detail::view_selected_detail(detail)
         } else {
             graph::view_commit_graph(&self.commit_history)
         };
