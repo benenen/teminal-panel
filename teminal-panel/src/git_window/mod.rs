@@ -5,7 +5,8 @@ mod theme;
 
 use self::git_data::{
     classify_file_content, get_base_file_content, get_commit_history, get_file_changes,
-    get_index_file_content, get_worktree_file_content, CommitNode, FileChange, FileContentKind,
+    get_index_file_content, get_worktree_file_content, write_worktree_file, CommitNode,
+    FileChange, FileContentKind,
 };
 use iced::{widget::text_editor, Element, Length, Task};
 use std::path::{Path, PathBuf};
@@ -47,6 +48,14 @@ impl SelectedFileDetail {
             dirty: false,
             diff: None,
             detail_error: Some(message),
+        }
+    }
+
+    fn selection(&self) -> FileSelection {
+        FileSelection {
+            path: self.path.clone(),
+            status: self.status.clone(),
+            staged: self.staged,
         }
     }
 }
@@ -143,9 +152,82 @@ impl GitWindow {
                 Task::none()
             }
             Message::ApplySelectedFile => {
+                let Some(selection) = self
+                    .selected_detail
+                    .as_ref()
+                    .map(SelectedFileDetail::selection)
+                else {
+                    return Task::none();
+                };
+
+                if selection.staged {
+                    return Task::none();
+                }
+
+                let draft_text = self
+                    .selected_detail
+                    .as_ref()
+                    .and_then(|detail| detail.draft.as_ref())
+                    .map(text_editor::Content::text);
+
+                let Some(draft_text) = draft_text else {
+                    return Task::none();
+                };
+
+                match write_worktree_file(&self.repo_path, &selection.path, &draft_text) {
+                    Ok(()) => {
+                        if let Ok(changes) = get_file_changes(&self.repo_path) {
+                            self.file_changes = changes;
+                        }
+
+                        match try_load_selected_file_detail(&self.repo_path, &selection) {
+                            Ok(detail) => {
+                                self.selected_detail = Some(detail);
+                            }
+                            Err(error) => {
+                                if let Some(detail) = self.selected_detail.as_mut() {
+                                    detail.detail_error =
+                                        Some(format!("Failed to reload applied changes: {error}"));
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(detail) = self.selected_detail.as_mut() {
+                            detail.detail_error =
+                                Some(format!("Failed to apply changes: {error}"));
+                        }
+                    }
+                }
                 Task::none()
             }
             Message::DiscardSelectedFile => {
+                let Some(selection) = self
+                    .selected_detail
+                    .as_ref()
+                    .map(SelectedFileDetail::selection)
+                else {
+                    return Task::none();
+                };
+
+                if selection.staged {
+                    return Task::none();
+                }
+
+                match try_load_selected_file_detail(&self.repo_path, &selection) {
+                    Ok(detail) => {
+                        if let Ok(changes) = get_file_changes(&self.repo_path) {
+                            self.file_changes = changes;
+                        }
+                        self.selected_detail = Some(detail);
+                    }
+                    Err(error) => {
+                        if let Some(detail) = self.selected_detail.as_mut() {
+                            detail.detail_error =
+                                Some(format!("Failed to discard changes: {error}"));
+                        }
+                    }
+                }
                 Task::none()
             }
             Message::CloseWindow => Task::none(),
@@ -296,6 +378,14 @@ impl GitWindow {
 }
 
 fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> SelectedFileDetail {
+    try_load_selected_file_detail(repo_path, selection)
+        .unwrap_or_else(|error| SelectedFileDetail::error(selection, error))
+}
+
+fn try_load_selected_file_detail(
+    repo_path: &Path,
+    selection: &FileSelection,
+) -> Result<SelectedFileDetail, String> {
     let base_bytes = match if selection.staged {
         get_base_file_content(repo_path, &selection.path)
     } else {
@@ -303,10 +393,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
     } {
         Ok(bytes) => bytes,
         Err(error) => {
-            return SelectedFileDetail::error(
-                selection,
-                format!("Failed to load base content: {error}"),
-            );
+            return Err(format!("Failed to load base content: {error}"));
         }
     };
 
@@ -324,10 +411,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
             None
         }
         Err(error) => {
-            return SelectedFileDetail::error(
-                selection,
-                format!("Failed to load working tree content: {error}"),
-            );
+            return Err(format!("Failed to load working tree content: {error}"));
         }
     };
 
@@ -346,7 +430,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
     };
 
     if content_kind == FileContentKind::Binary {
-        return SelectedFileDetail {
+        return Ok(SelectedFileDetail {
             path: selection.path.clone(),
             status: selection.status.clone(),
             staged: selection.staged,
@@ -357,7 +441,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
             dirty: false,
             diff,
             detail_error: None,
-        };
+        });
     }
 
     let base_text = base_bytes
@@ -367,7 +451,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
         .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
         .unwrap_or_default();
 
-    SelectedFileDetail {
+    Ok(SelectedFileDetail {
         path: selection.path.clone(),
         status: selection.status.clone(),
         staged: selection.staged,
@@ -378,7 +462,7 @@ fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> Sel
         dirty: false,
         diff,
         detail_error: None,
-    }
+    })
 }
 
 fn is_selected_file_change(
@@ -395,6 +479,7 @@ mod tests {
     use super::*;
     use git2::{IndexAddOption, Repository, Signature};
     use iced::widget::text_editor;
+    use std::sync::Arc;
 
     fn with_temp_repo<T>(f: impl FnOnce(&std::path::Path, &Repository) -> T) -> T {
         let temp_dir =
@@ -699,5 +784,141 @@ mod tests {
 
         assert!(is_selected_file_change(Some(&selected), &staged_change));
         assert!(!is_selected_file_change(Some(&selected), &unstaged_change));
+    }
+
+    #[test]
+    fn apply_selected_file_writes_draft_to_disk_and_refreshes_state() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::write(repo_path.join("README.md"), "working line\n")
+                .expect("write working tree content");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::SelectAll));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Paste(Arc::new("applied line\n".into())),
+            )));
+            let _ = git_window.update(Message::ApplySelectedFile);
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected file detail");
+
+            assert_eq!(
+                std::fs::read_to_string(repo_path.join("README.md")).expect("read applied file"),
+                "applied line\n"
+            );
+            assert_eq!(detail.worktree_text.as_deref(), Some("applied line\n"));
+            assert_eq!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                Some("applied line\n")
+            );
+            assert!(!detail.dirty);
+            assert!(detail.detail_error.is_none());
+        });
+    }
+
+    #[test]
+    fn discard_selected_file_reloads_current_disk_contents() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::write(repo_path.join("README.md"), "working line\n")
+                .expect("write working tree content");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::SelectAll));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Paste(Arc::new("draft line\n".into())),
+            )));
+
+            std::fs::write(repo_path.join("README.md"), "reloaded line\n")
+                .expect("write reloaded content");
+
+            let _ = git_window.update(Message::DiscardSelectedFile);
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected file detail");
+
+            assert_eq!(detail.worktree_text.as_deref(), Some("reloaded line\n"));
+            assert_eq!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                Some("reloaded line\n")
+            );
+            assert!(!detail.dirty);
+            assert!(detail.detail_error.is_none());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_failure_preserves_in_memory_draft() {
+        use std::os::unix::fs::symlink;
+
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n");
+            std::fs::write(repo_path.join("README.md"), "working line\n")
+                .expect("write working tree content");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::SelectAll));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Paste(Arc::new("draft line\n".into())),
+            )));
+
+            let outside_dir = std::env::temp_dir().join(format!(
+                "teminal-panel-git-window-outside-{}",
+                Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&outside_dir).expect("create outside dir");
+            std::fs::write(outside_dir.join("outside.txt"), "outside\n").expect("write outside");
+
+            std::fs::remove_file(repo_path.join("README.md")).expect("remove repo file");
+            symlink(outside_dir.join("outside.txt"), repo_path.join("README.md"))
+                .expect("create escape symlink");
+
+            let _ = git_window.update(Message::ApplySelectedFile);
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected file detail");
+
+            assert_eq!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                Some("draft line\n")
+            );
+            assert!(detail.dirty);
+            assert!(detail
+                .detail_error
+                .as_deref()
+                .is_some_and(|error| error.contains("Failed to apply changes")));
+
+            let _ = std::fs::remove_file(repo_path.join("README.md"));
+            let _ = std::fs::remove_dir_all(&outside_dir);
+        });
     }
 }

@@ -38,16 +38,24 @@ pub(super) fn view_selected_detail(detail: &SelectedFileDetail) -> Element<'_, M
 }
 
 fn view_text_detail(detail: &SelectedFileDetail) -> Element<'_, Message> {
-    let action_row = row![
-        button(text("Apply").size(12))
-            .on_press(Message::ApplySelectedFile)
-            .padding([8, 14]),
-        button(text("Discard").size(12))
-            .on_press(Message::DiscardSelectedFile)
-            .padding([8, 14]),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    let action_row: Element<'_, Message> = if detail.staged {
+        text("Staged snapshots are read-only in this phase.")
+            .size(12)
+            .color(theme::TEXT_TERTIARY)
+            .into()
+    } else {
+        row![
+            button(text("Apply").size(12))
+                .on_press(Message::ApplySelectedFile)
+                .padding([8, 14]),
+            button(text("Discard").size(12))
+                .on_press(Message::DiscardSelectedFile)
+                .padding([8, 14]),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into()
+    };
 
     let compare_row = row![
         container(
@@ -87,6 +95,16 @@ fn view_text_detail(detail: &SelectedFileDetail) -> Element<'_, Message> {
 
 fn view_worktree_editor(detail: &SelectedFileDetail) -> Element<'_, Message> {
     if let Some(draft) = detail.draft.as_ref() {
+        if detail.staged {
+            return scrollable(
+                text(draft.text())
+                    .size(12)
+                    .font(Font::MONOSPACE)
+                    .color(theme::TEXT_PRIMARY),
+            )
+            .into();
+        }
+
         text_editor(draft)
             .on_action(Message::EditSelectedFile)
             .font(Font::MONOSPACE)
