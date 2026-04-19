@@ -4,6 +4,7 @@ use super::view::terminal::{
 use super::{App, Message, OverlayState, SshAuthType};
 use crate::config::AppConfig;
 use crate::project::{panel::ProjectConnectionKind, Connection, SshAuth, SshService};
+use git2::Signature;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
@@ -26,6 +27,7 @@ fn sample_ssh_service() -> SshService {
 
 fn test_app() -> App {
     App {
+        main_window_id: iced::window::Id::unique(),
         config: AppConfig::default(),
         selected_project: None,
         hovered_project: None,
@@ -41,6 +43,31 @@ fn test_app() -> App {
         git_window_projects_by_id: std::collections::HashMap::new(),
         next_terminal_id: 1,
     }
+}
+
+fn init_git_repo_with_commit(repo_path: &std::path::Path) {
+    let repo = git2::Repository::init(repo_path).expect("init git repo");
+    std::fs::write(repo_path.join("README.md"), "# teminal-panel\n").expect("write repo file");
+
+    let mut index = repo.index().expect("open index");
+    index
+        .add_path(std::path::Path::new("README.md"))
+        .expect("stage readme");
+    index.write().expect("write index");
+
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let signature = Signature::now("Test User", "test@example.com").expect("create signature");
+
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Initial commit",
+        &tree,
+        &[],
+    )
+    .expect("create commit");
 }
 
 fn with_temp_config_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
@@ -208,6 +235,61 @@ fn git_window_state_cleanup_removes_project_and_window_mappings() {
 
     assert!(!app.git_windows_by_project.contains_key(&project_id));
     assert!(!app.git_window_projects_by_id.contains_key(&window_id));
+}
+
+#[test]
+fn open_git_window_creates_tracked_state_for_git_project() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        init_git_repo_with_commit(workspace_dir);
+
+        let mut app = test_app();
+        let _ = app.update(Message::AddProject {
+            name: "repo".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::OpenGitWindow(project_id));
+
+        let state = app
+            .git_windows_by_project
+            .get(&project_id)
+            .expect("git window tracked");
+
+        assert_eq!(app.git_window_projects_by_id.get(&state.window_id), Some(&project_id));
+    });
+}
+
+#[test]
+fn open_git_window_reuses_existing_tracked_state() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        init_git_repo_with_commit(workspace_dir);
+
+        let mut app = test_app();
+        let _ = app.update(Message::AddProject {
+            name: "repo".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+        let _ = app.update(Message::OpenGitWindow(project_id));
+        let first_window_id = app
+            .git_windows_by_project
+            .get(&project_id)
+            .expect("first git window")
+            .window_id;
+
+        let _ = app.update(Message::OpenGitWindow(project_id));
+
+        assert_eq!(app.git_windows_by_project.len(), 1);
+        assert_eq!(
+            app.git_windows_by_project
+                .get(&project_id)
+                .expect("tracked git window")
+                .window_id,
+            first_window_id
+        );
+    });
 }
 
 #[test]

@@ -16,6 +16,7 @@ use uuid::Uuid;
 mod view;
 
 pub struct App {
+    pub main_window_id: iced::window::Id,
     pub config: AppConfig,
     pub selected_project: Option<Uuid>,
     pub hovered_project: Option<Uuid>,
@@ -32,9 +33,10 @@ pub struct App {
     pub next_terminal_id: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GitWindowState {
     pub window_id: iced::window::Id,
+    project_name: Option<String>,
+    git_window: Option<crate::git_window::GitWindow>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,9 @@ pub enum Message {
     },
     OpenTerminal(Uuid),
     OpenGitWindow(Uuid),
+    GitWindow(iced::window::Id, crate::git_window::Message),
+    WindowCloseRequested(iced::window::Id),
+    WindowClosed(iced::window::Id),
     ToggleProjectExpanded(Uuid),
     SelectTab(Uuid, usize),
     CloseTab(Uuid, usize),
@@ -133,8 +138,11 @@ impl Default for SshServiceForm {
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
+        let (main_window_id, open_main_window) = iced::window::open(Self::main_window_settings());
+
         (
             Self {
+                main_window_id,
                 config: AppConfig::load(),
                 selected_project: None,
                 hovered_project: None,
@@ -150,7 +158,7 @@ impl App {
                 git_window_projects_by_id: HashMap::new(),
                 next_terminal_id: 1,
             },
-            Task::none(),
+            open_main_window.discard(),
         )
     }
 
@@ -168,9 +176,14 @@ impl App {
             Message::RemoveProject(id) => {
                 self.config.projects.retain(|project| project.id != id);
                 self.terminals.remove(&id);
-                if let Some(state) = self.git_windows_by_project.remove(&id) {
-                    self.git_window_projects_by_id.remove(&state.window_id);
-                }
+                let close_git_window_task = self
+                    .git_windows_by_project
+                    .get(&id)
+                    .map(|state| state.window_id)
+                    .map(|window_id| {
+                        self.close_git_window(window_id);
+                        iced::window::close(window_id)
+                    });
 
                 if self.selected_project == Some(id) {
                     self.selected_project = None;
@@ -180,6 +193,10 @@ impl App {
                 }
 
                 self.config.save();
+
+                if let Some(task) = close_git_window_task {
+                    return task;
+                }
             }
             Message::HoverProject(id) => {
                 self.hovered_project = id;
@@ -501,22 +518,63 @@ impl App {
                 }
             }
             Message::OpenGitWindow(project_id) => {
-                if let Some(project) = self.config.projects.iter().find(|p| p.id == project_id) {
-                    if !project.is_git_repo {
-                        return Task::none();
-                    }
-
-                    let (_git_window, task) = crate::git_window::GitWindow::new(
-                        project.id,
-                        project.name.clone(),
-                        project.working_dir.clone(),
-                    );
-
-                    println!("Opening git window for project: {}", project.name);
-
-                    return task.map(move |_| Message::OpenGitWindow(project_id));
-                } else {
+                let Some((project_name, working_dir, is_git_repo)) = self
+                    .config
+                    .projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                    .map(|project| {
+                        (
+                            project.name.clone(),
+                            project.working_dir.clone(),
+                            project.is_git_repo,
+                        )
+                    })
+                else {
                     return Task::none();
+                };
+
+                if !is_git_repo {
+                    return Task::none();
+                }
+
+                if let Some(state) = self.git_windows_by_project.get(&project_id) {
+                    return iced::window::gain_focus(state.window_id);
+                }
+
+                let (window_id, open_window) = iced::window::open(Self::git_window_settings());
+                let (git_window, task) =
+                    crate::git_window::GitWindow::new(project_id, project_name.clone(), working_dir);
+
+                self.track_git_window_with_state(
+                    project_id,
+                    GitWindowState {
+                        window_id,
+                        project_name: Some(project_name),
+                        git_window: Some(git_window),
+                    },
+                );
+
+                return Task::batch([
+                    open_window.discard(),
+                    task.map(move |message| Message::GitWindow(window_id, message)),
+                ]);
+            }
+            Message::GitWindow(window_id, message) => {
+                if let Some(git_window) = self.git_window_for_window_mut(window_id) {
+                    return git_window
+                        .update(message)
+                        .map(move |message| Message::GitWindow(window_id, message));
+                }
+            }
+            Message::WindowCloseRequested(window_id) => {
+                if window_id == self.main_window_id {
+                    return iced::exit();
+                }
+            }
+            Message::WindowClosed(window_id) => {
+                if window_id != self.main_window_id {
+                    self.close_git_window(window_id);
                 }
             }
             Message::ToggleProjectExpanded(id) => {
@@ -669,17 +727,50 @@ impl App {
         iced::widget::Stack::with_children(layers).into()
     }
 
-    pub fn theme(&self) -> Theme {
+    pub fn view_window(&self, window_id: iced::window::Id) -> Element<'_, Message> {
+        if window_id == self.main_window_id {
+            return self.view();
+        }
+
+        if let Some(git_window) = self.git_window_for_window(window_id) {
+            return git_window
+                .view()
+                .map(move |message| Message::GitWindow(window_id, message));
+        }
+
+        iced::widget::container(iced::widget::text("Window unavailable"))
+            .center_x(iced::Length::Fill)
+            .center_y(iced::Length::Fill)
+            .into()
+    }
+
+    pub fn title(&self, window_id: iced::window::Id) -> String {
+        if window_id == self.main_window_id {
+            return "teminal-panel".into();
+        }
+
+        self.git_window_state_for_window(window_id)
+            .and_then(|state| state.project_name.as_ref())
+            .map(|project_name| format!("Git - {project_name}"))
+            .unwrap_or_else(|| "Git".into())
+    }
+
+    pub fn theme(&self, _window_id: iced::window::Id) -> Theme {
         Theme::Dark
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        iced::Subscription::batch(
-            self.terminals
-                .values()
-                .flat_map(|pt| pt.terminals.iter())
-                .map(|ts| ts.terminal.subscription().map(Message::Terminal)),
-        )
+        let mut subscriptions: Vec<iced::Subscription<Message>> = self
+            .terminals
+            .values()
+            .flat_map(|pt| pt.terminals.iter())
+            .map(|ts| ts.terminal.subscription().map(Message::Terminal))
+            .collect();
+
+        subscriptions.push(iced::window::close_requests().map(Message::WindowCloseRequested));
+        subscriptions.push(iced::window::close_events().map(Message::WindowClosed));
+
+        iced::Subscription::batch(subscriptions)
     }
 }
 
@@ -713,6 +804,18 @@ pub(crate) fn remote_file_status_label_for_test(status: &RemoteFileStatus) -> Op
 }
 
 impl App {
+    fn main_window_settings() -> iced::window::Settings {
+        iced::window::Settings::default()
+    }
+
+    fn git_window_settings() -> iced::window::Settings {
+        iced::window::Settings {
+            size: iced::Size::new(1100.0, 720.0),
+            min_size: Some(iced::Size::new(840.0, 560.0)),
+            ..iced::window::Settings::default()
+        }
+    }
+
     pub(crate) fn can_open_git_window(&self, project_id: Uuid) -> bool {
         self.config
             .projects
@@ -723,27 +826,63 @@ impl App {
             })
     }
 
+    fn track_git_window_with_state(
+        &mut self,
+        project_id: Uuid,
+        state: GitWindowState,
+    ) -> bool {
+        if self.git_windows_by_project.contains_key(&project_id)
+            || self.git_window_projects_by_id.contains_key(&state.window_id)
+        {
+            return false;
+        }
+
+        self.git_window_projects_by_id
+            .insert(state.window_id, project_id);
+        self.git_windows_by_project.insert(project_id, state);
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn track_git_window(
         &mut self,
         project_id: Uuid,
         window_id: iced::window::Id,
     ) -> bool {
-        if self.git_windows_by_project.contains_key(&project_id)
-            || self.git_window_projects_by_id.contains_key(&window_id)
-        {
-            return false;
-        }
-
-        self.git_windows_by_project
-            .insert(project_id, GitWindowState { window_id });
-        self.git_window_projects_by_id.insert(window_id, project_id);
-        true
+        self.track_git_window_with_state(
+            project_id,
+            GitWindowState {
+                window_id,
+                project_name: None,
+                git_window: None,
+            },
+        )
     }
 
     pub(crate) fn close_git_window(&mut self, window_id: iced::window::Id) {
         if let Some(project_id) = self.git_window_projects_by_id.remove(&window_id) {
             self.git_windows_by_project.remove(&project_id);
         }
+    }
+
+    fn git_window_state_for_window(&self, window_id: iced::window::Id) -> Option<&GitWindowState> {
+        let project_id = self.git_window_projects_by_id.get(&window_id)?;
+        self.git_windows_by_project.get(project_id)
+    }
+
+    fn git_window_for_window(&self, window_id: iced::window::Id) -> Option<&crate::git_window::GitWindow> {
+        self.git_window_state_for_window(window_id)
+            .and_then(|state| state.git_window.as_ref())
+    }
+
+    fn git_window_for_window_mut(
+        &mut self,
+        window_id: iced::window::Id,
+    ) -> Option<&mut crate::git_window::GitWindow> {
+        let project_id = *self.git_window_projects_by_id.get(&window_id)?;
+        self.git_windows_by_project
+            .get_mut(&project_id)
+            .and_then(|state| state.git_window.as_mut())
     }
 
     fn ensure_project_terminals(&mut self, project_id: Uuid) -> &mut ProjectTerminals {
