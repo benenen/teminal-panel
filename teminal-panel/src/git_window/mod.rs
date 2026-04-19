@@ -2,9 +2,12 @@ mod git_data;
 mod graph;
 mod theme;
 
-use self::git_data::{get_commit_history, get_file_changes, CommitNode, FileChange};
-use iced::{Element, Font, Length, Task};
-use std::path::PathBuf;
+use self::git_data::{
+    classify_file_content, get_base_file_content, get_commit_history, get_file_changes,
+    get_worktree_file_content, CommitNode, FileChange, FileContentKind,
+};
+use iced::{widget::text_editor, Element, Font, Length, Task};
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 pub struct GitWindow {
@@ -13,14 +16,42 @@ pub struct GitWindow {
     repo_path: PathBuf,
     file_changes: Vec<FileChange>,
     commit_history: Vec<CommitNode>,
-    selected_file: Option<PathBuf>,
-    selected_diff: Option<String>,
+    selected_detail: Option<SelectedFileDetail>,
     error: Option<String>,
+}
+
+struct SelectedFileDetail {
+    path: PathBuf,
+    content_kind: FileContentKind,
+    base_text: Option<String>,
+    worktree_text: Option<String>,
+    draft: Option<text_editor::Content>,
+    dirty: bool,
+    diff: Option<String>,
+    detail_error: Option<String>,
+}
+
+impl SelectedFileDetail {
+    fn error(path: PathBuf, message: String) -> Self {
+        Self {
+            path,
+            content_kind: FileContentKind::Text,
+            base_text: None,
+            worktree_text: None,
+            draft: None,
+            dirty: false,
+            diff: None,
+            detail_error: Some(message),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     SelectFile(PathBuf),
+    EditSelectedFile(text_editor::Action),
+    ApplySelectedFile,
+    DiscardSelectedFile,
     CloseWindow,
 }
 
@@ -40,8 +71,7 @@ impl GitWindow {
                         repo_path,
                         file_changes: Vec::new(),
                         commit_history: Vec::new(),
-                        selected_file: None,
-                        selected_diff: None,
+                        selected_detail: None,
                         error: Some(format!("Failed to load git data: {}", e)),
                     },
                     Task::none(),
@@ -59,8 +89,7 @@ impl GitWindow {
                         repo_path,
                         file_changes,
                         commit_history: Vec::new(),
-                        selected_file: None,
-                        selected_diff: None,
+                        selected_detail: None,
                         error: Some(format!("Failed to load git history: {}", e)),
                     },
                     Task::none(),
@@ -75,8 +104,7 @@ impl GitWindow {
                 repo_path,
                 file_changes,
                 commit_history,
-                selected_file: None,
-                selected_diff: None,
+                selected_detail: None,
                 error: None,
             },
             Task::none(),
@@ -86,8 +114,25 @@ impl GitWindow {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SelectFile(path) => {
-                self.selected_diff = git_data::get_file_diff(&self.repo_path, &path).ok();
-                self.selected_file = Some(path);
+                self.selected_detail = Some(load_selected_file_detail(&self.repo_path, path));
+                Task::none()
+            }
+            Message::EditSelectedFile(action) => {
+                if let Some(detail) = self.selected_detail.as_mut() {
+                    if let Some(draft) = detail.draft.as_mut() {
+                        draft.perform(action);
+                        detail.dirty = detail
+                            .worktree_text
+                            .as_deref()
+                            .is_some_and(|worktree_text| draft.text() != worktree_text);
+                    }
+                }
+                Task::none()
+            }
+            Message::ApplySelectedFile => {
+                Task::none()
+            }
+            Message::DiscardSelectedFile => {
                 Task::none()
             }
             Message::CloseWindow => Task::none(),
@@ -95,6 +140,7 @@ impl GitWindow {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
+        use iced::widget::{button, column, container, row, scrollable, text};
         use iced::widget::{button, column, container, row, scrollable, text};
         use iced::Alignment;
 
@@ -134,7 +180,10 @@ impl GitWindow {
                 };
 
                 let file_path = file_change.path.clone();
-                let is_selected = self.selected_file.as_ref() == Some(&file_path);
+                let is_selected = self
+                    .selected_detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.path == file_path);
                 let file_row = button(
                     row![
                         text(status_text).size(12).color(status_color),
@@ -180,7 +229,10 @@ impl GitWindow {
                 };
 
                 let file_path = file_change.path.clone();
-                let is_selected = self.selected_file.as_ref() == Some(&file_path);
+                let is_selected = self
+                    .selected_detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.path == file_path);
                 let file_row = button(
                     row![
                         text(status_text).size(12).color(status_color),
@@ -208,27 +260,78 @@ impl GitWindow {
             content = content.push(header).push(file_list);
         }
 
-        let detail_pane: Element<'_, Message> = if let (Some(selected_file), Some(selected_diff)) =
-            (&self.selected_file, &self.selected_diff)
-        {
-            container(
+        let detail_pane: Element<'_, Message> = if let Some(detail) = &self.selected_detail {
+            let header = text(detail.path.display().to_string())
+                .size(14)
+                .color(theme::TEXT_PRIMARY);
+
+            let body: Element<'_, Message> = if let Some(error) = &detail.detail_error {
+                text(error.clone()).size(13).color(theme::GIT_DELETED).into()
+            } else if detail.content_kind == FileContentKind::Binary {
+                let diff_summary = detail
+                    .diff
+                    .as_deref()
+                    .filter(|diff| !diff.is_empty())
+                    .unwrap_or("Binary file selected");
+
                 column![
-                    text(selected_file.display().to_string())
-                        .size(14)
-                        .color(theme::TEXT_PRIMARY),
+                    text("Binary file").size(13).color(theme::TEXT_PRIMARY),
+                    text("Editing is not supported for binary files.")
+                        .size(12)
+                        .color(theme::TEXT_SECONDARY),
                     scrollable(
-                        text(selected_diff.clone())
+                        text(diff_summary)
                             .size(12)
                             .font(Font::MONOSPACE)
-                            .color(theme::TEXT_SECONDARY)
+                            .color(theme::TEXT_TERTIARY)
                     )
                 ]
                 .spacing(12)
-                .padding(20),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+                .into()
+            } else {
+                let dirty_label = if detail.dirty { "Dirty" } else { "Saved" };
+                let base_text = detail.base_text.as_deref().unwrap_or("");
+                let draft_text = detail
+                    .draft
+                    .as_ref()
+                    .map(text_editor::Content::text)
+                    .unwrap_or_default();
+
+                column![
+                    text(dirty_label).size(12).color(theme::TEXT_TERTIARY),
+                    row![
+                        container(
+                            scrollable(
+                                text(base_text)
+                                    .size(12)
+                                    .font(Font::MONOSPACE)
+                                    .color(theme::TEXT_SECONDARY)
+                            )
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                        container(
+                            scrollable(
+                                text(draft_text)
+                                    .size(12)
+                                    .font(Font::MONOSPACE)
+                                    .color(theme::TEXT_PRIMARY)
+                            )
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                    ]
+                    .spacing(12)
+                    .height(Length::Fill)
+                ]
+                .spacing(12)
+                .into()
+            };
+
+            container(column![header, body].spacing(12).padding(20))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else {
             graph::view_commit_graph(&self.commit_history)
         };
@@ -238,9 +341,69 @@ impl GitWindow {
                 .width(Length::Fixed(300.0))
                 .height(Length::Fill),
             detail_pane,
+            detail_pane,
         ]
         .height(Length::Fill)
         .into()
+    }
+}
+
+fn load_selected_file_detail(repo_path: &Path, path: PathBuf) -> SelectedFileDetail {
+    let base_bytes = match get_base_file_content(repo_path, &path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return SelectedFileDetail::error(path, format!("Failed to load base content: {error}"));
+        }
+    };
+
+    let worktree_bytes = match get_worktree_file_content(repo_path, &path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return SelectedFileDetail::error(
+                path,
+                format!("Failed to load working tree content: {error}"),
+            );
+        }
+    };
+
+    let diff = git_data::get_file_diff(repo_path, &path).ok();
+    let content_kind = if base_bytes
+        .as_deref()
+        .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
+        || classify_file_content(&worktree_bytes) == FileContentKind::Binary
+    {
+        FileContentKind::Binary
+    } else {
+        FileContentKind::Text
+    };
+
+    if content_kind == FileContentKind::Binary {
+        return SelectedFileDetail {
+            path,
+            content_kind,
+            base_text: None,
+            worktree_text: None,
+            draft: None,
+            dirty: false,
+            diff,
+            detail_error: None,
+        };
+    }
+
+    let base_text = base_bytes
+        .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
+        .unwrap_or_default();
+    let worktree_text = String::from_utf8(worktree_bytes).unwrap_or_default();
+
+    SelectedFileDetail {
+        path,
+        content_kind,
+        base_text: Some(base_text),
+        worktree_text: Some(worktree_text.clone()),
+        draft: Some(text_editor::Content::with_text(&worktree_text)),
+        dirty: false,
+        diff,
+        detail_error: None,
     }
 }
 
@@ -248,6 +411,7 @@ impl GitWindow {
 mod tests {
     use super::*;
     use git2::{IndexAddOption, Repository, Signature};
+    use iced::widget::text_editor;
 
     fn with_temp_repo<T>(f: impl FnOnce(&std::path::Path, &Repository) -> T) -> T {
         let temp_dir =
@@ -291,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_file_loads_diff_text_for_detail_pane() {
+    fn selecting_text_file_initializes_compare_editor_state() {
         with_temp_repo(|repo_path, repo| {
             commit_file(repo, repo_path, "README.md", "# test\n");
             std::fs::write(repo_path.join("README.md"), "# test\nnew line\n")
@@ -302,11 +466,97 @@ mod tests {
 
             let _ = git_window.update(Message::SelectFile(PathBuf::from("README.md")));
 
-            assert_eq!(git_window.selected_file, Some(PathBuf::from("README.md")));
-            assert!(git_window
-                .selected_diff
-                .as_deref()
-                .is_some_and(|diff| diff.contains("+new line")));
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected file detail");
+
+            assert_eq!(detail.path, PathBuf::from("README.md"));
+            assert_eq!(detail.content_kind, git_data::FileContentKind::Text);
+            assert_eq!(detail.base_text.as_deref(), Some("# test\n"));
+            assert_eq!(detail.worktree_text.as_deref(), Some("# test\nnew line\n"));
+            assert_eq!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                Some("# test\nnew line\n")
+            );
+            assert!(!detail.dirty);
+            assert!(detail.detail_error.is_none());
+        });
+    }
+
+    #[test]
+    fn selecting_binary_file_enters_non_editable_detail_state() {
+        with_temp_repo(|repo_path, repo| {
+            std::fs::write(repo_path.join("image.bin"), [0_u8, 159, 146, 150])
+                .expect("write binary repo file");
+
+            let mut index = repo.index().expect("open index");
+            index
+                .add_path(std::path::Path::new("image.bin"))
+                .expect("stage binary file");
+            index.write().expect("write index");
+
+            let tree_id = index.write_tree().expect("write tree");
+            let tree = repo.find_tree(tree_id).expect("find tree");
+            let signature = Signature::now("Test User", "test@example.com").expect("signature");
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Initial commit",
+                &tree,
+                &[],
+            )
+            .expect("create commit");
+
+            std::fs::write(repo_path.join("image.bin"), [0_u8, 159, 146, 151])
+                .expect("update binary repo file");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(PathBuf::from("image.bin")));
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected binary detail");
+
+            assert_eq!(detail.path, PathBuf::from("image.bin"));
+            assert_eq!(detail.content_kind, git_data::FileContentKind::Binary);
+            assert!(detail.base_text.is_none());
+            assert!(detail.worktree_text.is_none());
+            assert!(detail.draft.is_none());
+            assert!(!detail.dirty);
+            assert!(detail.detail_error.is_none());
+        });
+    }
+
+    #[test]
+    fn git_window_detail_edit_marks_selected_text_file_dirty() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "# test\n");
+            std::fs::write(repo_path.join("README.md"), "# test\nnew line\n")
+                .expect("update repo file");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(PathBuf::from("README.md")));
+            let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
+                text_editor::Edit::Insert('!'),
+            )));
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected file detail");
+
+            assert!(detail.dirty);
+            assert_ne!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                detail.worktree_text.as_deref()
+            );
         });
     }
 }
