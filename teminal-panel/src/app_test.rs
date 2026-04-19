@@ -37,6 +37,8 @@ fn test_app() -> App {
         ssh_service_form: Default::default(),
         editing_ssh_service: None,
         terminals: std::collections::HashMap::new(),
+        git_windows_by_project: std::collections::HashMap::new(),
+        git_window_projects_by_id: std::collections::HashMap::new(),
         next_terminal_id: 1,
     }
 }
@@ -168,6 +170,44 @@ fn ssh_project_does_not_expose_git_repo_flag() {
     let _ = app.update(Message::SubmitAddProjectForm);
 
     assert!(!app.config.projects[0].is_git_repo);
+}
+
+#[test]
+fn git_window_state_rejects_non_git_projects() {
+    with_temp_config_dir(|workspace_dir: &PathBuf| {
+        let mut app = test_app();
+        let _ = app.update(Message::AddProject {
+            name: "plain".into(),
+            working_dir: workspace_dir.display().to_string(),
+        });
+
+        let project_id = app.config.projects[0].id;
+
+        assert!(!app.can_open_git_window(project_id));
+    });
+}
+
+#[test]
+fn git_window_state_prevents_duplicate_project_windows() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+    let window_id = iced::window::Id::unique();
+
+    assert!(app.track_git_window(project_id, window_id));
+    assert!(!app.track_git_window(project_id, iced::window::Id::unique()));
+}
+
+#[test]
+fn git_window_state_cleanup_removes_project_and_window_mappings() {
+    let mut app = test_app();
+    let project_id = Uuid::new_v4();
+    let window_id = iced::window::Id::unique();
+
+    assert!(app.track_git_window(project_id, window_id));
+    app.close_git_window(window_id);
+
+    assert!(!app.git_windows_by_project.contains_key(&project_id));
+    assert!(!app.git_window_projects_by_id.contains_key(&window_id));
 }
 
 #[test]

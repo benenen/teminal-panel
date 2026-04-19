@@ -27,7 +27,14 @@ pub struct App {
     pub ssh_service_form: SshServiceForm,
     pub editing_ssh_service: Option<Uuid>,
     pub terminals: HashMap<Uuid, ProjectTerminals>,
+    pub git_windows_by_project: HashMap<Uuid, GitWindowState>,
+    pub git_window_projects_by_id: HashMap<iced::window::Id, Uuid>,
     pub next_terminal_id: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GitWindowState {
+    pub window_id: iced::window::Id,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +146,8 @@ impl App {
                 ssh_service_form: Default::default(),
                 editing_ssh_service: None,
                 terminals: HashMap::new(),
+                git_windows_by_project: HashMap::new(),
+                git_window_projects_by_id: HashMap::new(),
                 next_terminal_id: 1,
             },
             Task::none(),
@@ -159,6 +168,9 @@ impl App {
             Message::RemoveProject(id) => {
                 self.config.projects.retain(|project| project.id != id);
                 self.terminals.remove(&id);
+                if let Some(state) = self.git_windows_by_project.remove(&id) {
+                    self.git_window_projects_by_id.remove(&state.window_id);
+                }
 
                 if self.selected_project == Some(id) {
                     self.selected_project = None;
@@ -701,6 +713,39 @@ pub(crate) fn remote_file_status_label_for_test(status: &RemoteFileStatus) -> Op
 }
 
 impl App {
+    pub(crate) fn can_open_git_window(&self, project_id: Uuid) -> bool {
+        self.config
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .is_some_and(|project| {
+                project.is_git_repo && !self.git_windows_by_project.contains_key(&project_id)
+            })
+    }
+
+    pub(crate) fn track_git_window(
+        &mut self,
+        project_id: Uuid,
+        window_id: iced::window::Id,
+    ) -> bool {
+        if self.git_windows_by_project.contains_key(&project_id)
+            || self.git_window_projects_by_id.contains_key(&window_id)
+        {
+            return false;
+        }
+
+        self.git_windows_by_project
+            .insert(project_id, GitWindowState { window_id });
+        self.git_window_projects_by_id.insert(window_id, project_id);
+        true
+    }
+
+    pub(crate) fn close_git_window(&mut self, window_id: iced::window::Id) {
+        if let Some(project_id) = self.git_window_projects_by_id.remove(&window_id) {
+            self.git_windows_by_project.remove(&project_id);
+        }
+    }
+
     fn ensure_project_terminals(&mut self, project_id: Uuid) -> &mut ProjectTerminals {
         self.terminals
             .entry(project_id)
