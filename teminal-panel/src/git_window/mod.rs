@@ -22,6 +22,8 @@ pub struct GitWindow {
 
 struct SelectedFileDetail {
     path: PathBuf,
+    status: git_data::FileStatus,
+    staged: bool,
     content_kind: FileContentKind,
     base_text: Option<String>,
     worktree_text: Option<String>,
@@ -32,9 +34,11 @@ struct SelectedFileDetail {
 }
 
 impl SelectedFileDetail {
-    fn error(path: PathBuf, message: String) -> Self {
+    fn error(selection: &FileSelection, message: String) -> Self {
         Self {
-            path,
+            path: selection.path.clone(),
+            status: selection.status.clone(),
+            staged: selection.staged,
             content_kind: FileContentKind::Text,
             base_text: None,
             worktree_text: None,
@@ -47,8 +51,15 @@ impl SelectedFileDetail {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct FileSelection {
+    path: PathBuf,
+    status: git_data::FileStatus,
+    staged: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum Message {
-    SelectFile(PathBuf),
+    SelectFile(FileSelection),
     EditSelectedFile(text_editor::Action),
     ApplySelectedFile,
     DiscardSelectedFile,
@@ -113,8 +124,9 @@ impl GitWindow {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::SelectFile(path) => {
-                self.selected_detail = Some(load_selected_file_detail(&self.repo_path, path));
+            Message::SelectFile(selection) => {
+                self.selected_detail =
+                    Some(load_selected_file_detail(&self.repo_path, &selection));
                 Task::none()
             }
             Message::EditSelectedFile(action) => {
@@ -194,7 +206,11 @@ impl GitWindow {
                     .spacing(10)
                     .align_y(Alignment::Center),
                 )
-                .on_press(Message::SelectFile(file_path))
+                .on_press(Message::SelectFile(FileSelection {
+                    path: file_path,
+                    status: file_change.status.clone(),
+                    staged: file_change.staged,
+                }))
                 .padding([6, 8])
                 .width(Length::Fill)
                 .style(move |theme_value, status| {
@@ -243,7 +259,11 @@ impl GitWindow {
                     .spacing(10)
                     .align_y(Alignment::Center),
                 )
-                .on_press(Message::SelectFile(file_path))
+                .on_press(Message::SelectFile(FileSelection {
+                    path: file_path,
+                    status: file_change.status.clone(),
+                    staged: file_change.staged,
+                }))
                 .padding([6, 8])
                 .width(Length::Fill)
                 .style(move |theme_value, status| {
@@ -348,29 +368,40 @@ impl GitWindow {
     }
 }
 
-fn load_selected_file_detail(repo_path: &Path, path: PathBuf) -> SelectedFileDetail {
-    let base_bytes = match get_base_file_content(repo_path, &path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return SelectedFileDetail::error(path, format!("Failed to load base content: {error}"));
-        }
-    };
-
-    let worktree_bytes = match get_worktree_file_content(repo_path, &path) {
+fn load_selected_file_detail(repo_path: &Path, selection: &FileSelection) -> SelectedFileDetail {
+    let base_bytes = match get_base_file_content(repo_path, &selection.path) {
         Ok(bytes) => bytes,
         Err(error) => {
             return SelectedFileDetail::error(
-                path,
+                selection,
+                format!("Failed to load base content: {error}"),
+            );
+        }
+    };
+
+    let worktree_bytes = match get_worktree_file_content(repo_path, &selection.path) {
+        Ok(bytes) => Some(bytes),
+        Err(error)
+            if selection.status == git_data::FileStatus::Deleted
+                && error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(error) => {
+            return SelectedFileDetail::error(
+                selection,
                 format!("Failed to load working tree content: {error}"),
             );
         }
     };
 
-    let diff = git_data::get_file_diff(repo_path, &path).ok();
+    let diff = git_data::get_file_diff(repo_path, &selection.path).ok();
     let content_kind = if base_bytes
         .as_deref()
         .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
-        || classify_file_content(&worktree_bytes) == FileContentKind::Binary
+        || worktree_bytes
+            .as_deref()
+            .is_some_and(|bytes| classify_file_content(bytes) == FileContentKind::Binary)
     {
         FileContentKind::Binary
     } else {
@@ -379,7 +410,9 @@ fn load_selected_file_detail(repo_path: &Path, path: PathBuf) -> SelectedFileDet
 
     if content_kind == FileContentKind::Binary {
         return SelectedFileDetail {
-            path,
+            path: selection.path.clone(),
+            status: selection.status.clone(),
+            staged: selection.staged,
             content_kind,
             base_text: None,
             worktree_text: None,
@@ -393,10 +426,14 @@ fn load_selected_file_detail(repo_path: &Path, path: PathBuf) -> SelectedFileDet
     let base_text = base_bytes
         .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
         .unwrap_or_default();
-    let worktree_text = String::from_utf8(worktree_bytes).unwrap_or_default();
+    let worktree_text = worktree_bytes
+        .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
+        .unwrap_or_default();
 
     SelectedFileDetail {
-        path,
+        path: selection.path.clone(),
+        status: selection.status.clone(),
+        staged: selection.staged,
         content_kind,
         base_text: Some(base_text),
         worktree_text: Some(worktree_text.clone()),
@@ -464,7 +501,11 @@ mod tests {
             let (mut git_window, _) =
                 GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
 
-            let _ = git_window.update(Message::SelectFile(PathBuf::from("README.md")));
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
 
             let detail = git_window
                 .selected_detail
@@ -472,6 +513,8 @@ mod tests {
                 .expect("selected file detail");
 
             assert_eq!(detail.path, PathBuf::from("README.md"));
+            assert_eq!(detail.status, git_data::FileStatus::Modified);
+            assert!(!detail.staged);
             assert_eq!(detail.content_kind, git_data::FileContentKind::Text);
             assert_eq!(detail.base_text.as_deref(), Some("# test\n"));
             assert_eq!(detail.worktree_text.as_deref(), Some("# test\nnew line\n"));
@@ -515,7 +558,11 @@ mod tests {
             let (mut git_window, _) =
                 GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
 
-            let _ = git_window.update(Message::SelectFile(PathBuf::from("image.bin")));
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("image.bin"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
 
             let detail = git_window
                 .selected_detail
@@ -523,6 +570,8 @@ mod tests {
                 .expect("selected binary detail");
 
             assert_eq!(detail.path, PathBuf::from("image.bin"));
+            assert_eq!(detail.status, git_data::FileStatus::Modified);
+            assert!(!detail.staged);
             assert_eq!(detail.content_kind, git_data::FileContentKind::Binary);
             assert!(detail.base_text.is_none());
             assert!(detail.worktree_text.is_none());
@@ -542,7 +591,11 @@ mod tests {
             let (mut git_window, _) =
                 GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
 
-            let _ = git_window.update(Message::SelectFile(PathBuf::from("README.md")));
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Modified,
+                staged: false,
+            }));
             let _ = git_window.update(Message::EditSelectedFile(text_editor::Action::Edit(
                 text_editor::Edit::Insert('!'),
             )));
@@ -557,6 +610,39 @@ mod tests {
                 detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
                 detail.worktree_text.as_deref()
             );
+        });
+    }
+
+    #[test]
+    fn git_window_detail_selecting_deleted_file_uses_empty_worktree_state() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "# test\n");
+            std::fs::remove_file(repo_path.join("README.md")).expect("delete repo file");
+
+            let (mut git_window, _) =
+                GitWindow::new(Uuid::new_v4(), "repo".into(), repo_path.to_path_buf());
+
+            let _ = git_window.update(Message::SelectFile(FileSelection {
+                path: PathBuf::from("README.md"),
+                status: git_data::FileStatus::Deleted,
+                staged: false,
+            }));
+
+            let detail = git_window
+                .selected_detail
+                .as_ref()
+                .expect("selected deleted detail");
+
+            assert_eq!(detail.path, PathBuf::from("README.md"));
+            assert_eq!(detail.status, git_data::FileStatus::Deleted);
+            assert_eq!(detail.content_kind, git_data::FileContentKind::Text);
+            assert_eq!(detail.base_text.as_deref(), Some("# test\n"));
+            assert_eq!(detail.worktree_text.as_deref(), Some(""));
+            assert_eq!(
+                detail.draft.as_ref().map(text_editor::Content::text).as_deref(),
+                Some("")
+            );
+            assert!(detail.detail_error.is_none());
         });
     }
 }
