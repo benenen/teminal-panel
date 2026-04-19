@@ -134,7 +134,8 @@ pub fn get_file_diff_for_selection(
         let index = repo.index()?;
         repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut opts))?
     } else {
-        repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?
+        let index = repo.index()?;
+        repo.diff_index_to_workdir(Some(&index), Some(&mut opts))?
     };
     render_diff_text(&diff)
 }
@@ -488,6 +489,30 @@ mod tests {
 
             assert!(diff.contains("+staged line"));
             assert!(!diff.contains("+unstaged line"));
+        });
+    }
+
+    #[test]
+    fn git_file_diff_for_unstaged_selection_uses_index_to_worktree_diff() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "base line\n", "Initial commit");
+            std::fs::write(repo_path.join("README.md"), "staged line\n")
+                .expect("write staged content");
+
+            let mut index = repo.index().expect("open index");
+            index
+                .add_path(Path::new("README.md"))
+                .expect("stage modified file");
+            index.write().expect("write index");
+
+            std::fs::write(repo_path.join("README.md"), "staged line\nunstaged line\n")
+                .expect("write unstaged follow-up");
+
+            let diff = get_file_diff_for_selection(repo_path, Path::new("README.md"), false)
+                .expect("load unstaged diff");
+
+            assert!(!diff.contains("+staged line"));
+            assert!(diff.contains("+unstaged line"));
         });
     }
 
