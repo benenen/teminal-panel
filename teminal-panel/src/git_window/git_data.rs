@@ -1,4 +1,4 @@
-use git2::{Repository, Status, StatusOptions};
+use git2::{DiffFormat, DiffOptions, Repository, Status, StatusOptions};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +88,28 @@ pub fn get_commit_history(repo_path: &Path, limit: usize) -> Result<Vec<CommitNo
     Ok(commits)
 }
 
+pub fn get_file_diff(repo_path: &Path, file_path: &Path) -> Result<String, git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+
+    let mut opts = DiffOptions::new();
+    opts.pathspec(file_path);
+
+    let diff = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
+    let mut patch = String::new();
+
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        match line.origin() {
+            '+' | '-' | ' ' | '\\' => patch.push(line.origin()),
+            _ => {}
+        }
+        patch.push_str(std::str::from_utf8(line.content()).unwrap_or_default());
+        true
+    })?;
+
+    Ok(patch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +185,27 @@ mod tests {
             assert_eq!(commit.summary, "Initial commit");
             assert_eq!(commit.short_id.len(), 7);
             assert!(!commit.short_id.is_empty());
+        });
+    }
+
+    #[test]
+    fn git_file_diff_non_repo_fails_cleanly() {
+        let result = get_file_diff(Path::new("/tmp"), Path::new("README.md"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn git_file_diff_returns_patch_text_for_modified_file() {
+        with_temp_repo(|repo_path, repo| {
+            commit_file(repo, repo_path, "README.md", "# test\n", "Initial commit");
+            std::fs::write(repo_path.join("README.md"), "# test\nnew line\n")
+                .expect("update repo file");
+
+            let diff = get_file_diff(repo_path, Path::new("README.md")).expect("load file diff");
+
+            assert!(diff.contains("diff --git"));
+            assert!(diff.contains("README.md"));
+            assert!(diff.contains("+new line"));
         });
     }
 }

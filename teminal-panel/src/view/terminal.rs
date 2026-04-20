@@ -38,16 +38,19 @@ pub(crate) fn terminal_footer_label(display_mode: DisplayMode, terminal_count: u
 pub(crate) struct TerminalFooterModel {
     pub label: String,
     pub show_git_icon: bool,
+    pub git_project_id: Option<Uuid>,
 }
 
 pub(crate) fn terminal_footer_model(
     display_mode: DisplayMode,
     terminal_count: usize,
+    project_id: Uuid,
     is_git_repo: bool,
 ) -> TerminalFooterModel {
     TerminalFooterModel {
         label: terminal_footer_label(display_mode, terminal_count),
         show_git_icon: is_git_repo,
+        git_project_id: is_git_repo.then_some(project_id),
     }
 }
 
@@ -142,7 +145,7 @@ impl App {
         project_terms: &'a ProjectTerminals,
     ) -> Element<'a, Message> {
         let tab_bar = self.view_tab_bar(project_id, project_terms);
-        let footer = self.view_terminal_footer(project_terms, is_git_repo);
+        let footer = self.view_terminal_footer(project_id, project_terms, is_git_repo);
 
         let terminal_content: Element<'_, Message> = match project_terms.display_mode {
             crate::terminal::DisplayMode::Tabs => {
@@ -231,17 +234,30 @@ impl App {
 
     fn view_terminal_footer<'a>(
         &'a self,
+        project_id: Uuid,
         project_terms: &'a ProjectTerminals,
         is_git_repo: bool,
     ) -> Element<'a, Message> {
         let footer = terminal_footer_model(
             project_terms.display_mode,
             project_terms.terminals.len(),
+            project_id,
             is_git_repo,
         );
 
         let mut content = row![].spacing(6).align_y(iced::alignment::Vertical::Center);
-        if footer.show_git_icon {
+        if let Some(git_project_id) = footer.git_project_id {
+            content = content.push(
+                button(
+                    bootstrap::git()
+                        .size(11)
+                        .color(iced::Color::from_rgb(0.48, 0.48, 0.48)),
+                )
+                .on_press(Message::OpenGitWindow(git_project_id))
+                .padding(0)
+                .style(button::text),
+            );
+        } else if footer.show_git_icon {
             content = content.push(
                 bootstrap::git()
                     .size(11)

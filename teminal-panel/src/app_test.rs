@@ -453,17 +453,25 @@ fn terminal_footer_label_in_panel_mode_uses_terminal_count() {
 
 #[test]
 fn terminal_footer_model_shows_git_icon_for_git_projects() {
-    let footer = terminal_footer_model(crate::terminal::DisplayMode::Tabs, 3, true);
+    let project_id = Uuid::new_v4();
+    let footer = terminal_footer_model(crate::terminal::DisplayMode::Tabs, 3, project_id, true);
 
     assert!(footer.show_git_icon);
+    assert_eq!(footer.git_project_id, Some(project_id));
     assert_eq!(footer.label, "Tabs mode · 3 terminals");
 }
 
 #[test]
 fn terminal_footer_model_hides_git_icon_for_non_git_projects() {
-    let footer = terminal_footer_model(crate::terminal::DisplayMode::Panel, 2, false);
+    let footer = terminal_footer_model(
+        crate::terminal::DisplayMode::Panel,
+        2,
+        Uuid::new_v4(),
+        false,
+    );
 
     assert!(!footer.show_git_icon);
+    assert_eq!(footer.git_project_id, None);
     assert_eq!(footer.label, "Panel mode · 2 terminals");
 }
 
